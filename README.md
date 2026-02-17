@@ -20,6 +20,7 @@ The app is designed around TMDB movie playback via Real-Debrid links, with serve
 - `assets/images/`: static artwork and thumbnail images
 - `assets/videos/`: local video files used by hero/continue-watching
 - root `*.html`, `*.js`, `*.css`: active app pages and logic
+- legacy clone import folders are removed from the active repo tree
 
 ## 2. Runtime Model
 
@@ -174,11 +175,13 @@ Preferences handled by player:
 
 - audio language preference stored in localStorage per TMDB movie (`netflix-audio-lang:movie:<tmdbId>`)
 - stream quality preference read from settings key
-- subtitle preference persisted server-side via `/api/title/preferences`
+- subtitle language + on/off stored in localStorage per TMDB movie (`netflix-subtitle-lang:movie:<tmdbId>`)
+- subtitle stream selection stored in localStorage per TMDB movie (`netflix-subtitle-stream:movie:<tmdbId>`)
+- subtitle preference also persisted server-side via `/api/title/preferences`
 
 Resume/session behavior:
 
-- local resume storage is effectively disabled in current player implementation
+- local resume storage is enabled per source (`netflix-resume:<sourceIdentity>`) and restored on reopen
 - client session sync (`/api/session/progress`) is currently disabled by `canSyncPlaybackSession() => false`
 
 ## 6. API Surface
@@ -481,6 +484,9 @@ Currently persisted:
 
 - quality preference: localStorage (`netflix-stream-quality-pref`)
 - audio language preference: localStorage per movie (`netflix-audio-lang:movie:<tmdbId>`)
+- subtitle language preference: localStorage per movie (`netflix-subtitle-lang:movie:<tmdbId>`)
+- subtitle stream preference: localStorage per movie (`netflix-subtitle-stream:movie:<tmdbId>`)
+- resume position: localStorage per source (`netflix-resume:<sourceIdentity>`)
 - subtitle text color preference: localStorage (`netflix-subtitle-color-pref`, default `#b8bcc3`)
 - profile icon style preference: localStorage (`netflix-profile-avatar-style`, default `blue`)
 - profile icon mode/image: localStorage (`netflix-profile-avatar-mode`, `netflix-profile-avatar-image`)
@@ -488,7 +494,7 @@ Currently persisted:
 
 Currently not actively used by player:
 
-- playback resume/session progress sync (client disabled)
+- server playback session progress sync (client disabled)
 - manual sync preference persistence (UI removed)
 
 ## 15. Recovery and Resilience
