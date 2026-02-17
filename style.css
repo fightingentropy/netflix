@@ -440,6 +440,12 @@ body.modal-open {
   letter-spacing: -0.015em;
 }
 
+.continue-empty {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.96rem;
+}
+
 .popular-row {
   position: relative;
   z-index: 12;
@@ -518,6 +524,18 @@ body.modal-open {
 
 .progress {
   display: none;
+}
+
+.continue-row .progress {
+  display: block;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.continue-row .progress span {
+  display: block;
+  height: 100%;
+  background: var(--netflix-red);
 }
 
 .card-hover {

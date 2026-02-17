@@ -1,5 +1,7 @@
 const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
 const SUBTITLE_COLOR_PREF_KEY = "netflix-subtitle-color-pref";
+const SOURCE_MIN_SEEDERS_PREF_KEY = "netflix-source-filter-min-seeders";
+const SOURCE_ALLOWED_FORMATS_PREF_KEY = "netflix-source-filter-allowed-formats";
 const PROFILE_AVATAR_STYLE_PREF_KEY = "netflix-profile-avatar-style";
 const PROFILE_AVATAR_MODE_PREF_KEY = "netflix-profile-avatar-mode";
 const PROFILE_AVATAR_IMAGE_PREF_KEY = "netflix-profile-avatar-image";
@@ -10,6 +12,7 @@ const DEFAULT_AVATAR_MODE = "preset";
 const AVATAR_OUTPUT_SIZE_PX = 180;
 
 const supportedStreamQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
+const supportedSourceFormats = ["mp4", "mkv", "m3u8", "ts", "avi", "wmv"];
 const supportedAvatarStyles = new Set(["blue", "crimson", "emerald", "violet", "amber"]);
 const supportedAvatarChoices = new Set([...supportedAvatarStyles, "custom"]);
 const avatarStyleClassNames = Array.from(supportedAvatarStyles).map((style) => `avatar-style-${style}`);
@@ -23,8 +26,13 @@ const avatarStylePreview = document.getElementById("avatarStylePreview");
 const avatarCustomThumb = document.getElementById("avatarCustomThumb");
 const avatarImageInput = document.getElementById("avatarImageInput");
 const avatarUploadHint = document.getElementById("avatarUploadHint");
+const clearAllCachesBtn = document.getElementById("clearAllCachesBtn");
+const cacheClearStatus = document.getElementById("cacheClearStatus");
+const sourceMinSeedersInput = document.getElementById("sourceMinSeeders");
+const sourceFormatInputs = Array.from(document.querySelectorAll('input[name="sourceFormats"]'));
 
 let pendingCustomAvatarImage = "";
+let isClearingCaches = false;
 
 function normalizeStreamQualityPreference(value) {
   const normalized = String(value || "").trim().toLowerCase();
@@ -44,6 +52,109 @@ function getStoredStreamQualityPreference() {
     return normalizeStreamQualityPreference(localStorage.getItem(STREAM_QUALITY_PREF_KEY));
   } catch {
     return "auto";
+  }
+}
+
+function normalizeSourceMinSeeders(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  const floored = Math.floor(parsed);
+  return Math.max(0, Math.min(50000, floored));
+}
+
+function normalizeSourceFormats(value) {
+  const sourceValues = Array.isArray(value)
+    ? value
+    : String(value || "")
+      .split(/[,\s]+/g)
+      .filter(Boolean);
+
+  const normalized = sourceValues
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => supportedSourceFormats.includes(item));
+  return [...new Set(normalized)];
+}
+
+function getStoredSourceMinSeeders() {
+  try {
+    return normalizeSourceMinSeeders(localStorage.getItem(SOURCE_MIN_SEEDERS_PREF_KEY));
+  } catch {
+    return 0;
+  }
+}
+
+function getStoredSourceFormats() {
+  try {
+    const raw = localStorage.getItem(SOURCE_ALLOWED_FORMATS_PREF_KEY);
+    if (!raw) {
+      return [...supportedSourceFormats];
+    }
+
+    let parsed = raw;
+    if (raw.trim().startsWith("[")) {
+      parsed = JSON.parse(raw);
+    }
+
+    const normalized = normalizeSourceFormats(parsed);
+    if (!normalized.length) {
+      return [...supportedSourceFormats];
+    }
+    return normalized;
+  } catch {
+    return [...supportedSourceFormats];
+  }
+}
+
+function setSelectedSourceFilters(minSeeders = 0, allowedFormats = supportedSourceFormats) {
+  const safeMinSeeders = normalizeSourceMinSeeders(minSeeders);
+  const formatSet = new Set(normalizeSourceFormats(allowedFormats));
+
+  if (sourceMinSeedersInput) {
+    sourceMinSeedersInput.value = String(safeMinSeeders);
+  }
+
+  sourceFormatInputs.forEach((input) => {
+    input.checked = formatSet.has(String(input.value || "").trim().toLowerCase());
+  });
+}
+
+function persistSourceMinSeeders(value) {
+  const normalized = normalizeSourceMinSeeders(value);
+  try {
+    if (normalized <= 0) {
+      localStorage.removeItem(SOURCE_MIN_SEEDERS_PREF_KEY);
+      return 0;
+    }
+    localStorage.setItem(SOURCE_MIN_SEEDERS_PREF_KEY, String(normalized));
+    return normalized;
+  } catch {
+    return normalized;
+  }
+}
+
+function readSelectedSourceFormatsFromForm() {
+  const selected = sourceFormatInputs
+    .filter((input) => input.checked)
+    .map((input) => String(input.value || "").trim().toLowerCase());
+  const normalized = normalizeSourceFormats(selected);
+  return normalized.length ? normalized : [...supportedSourceFormats];
+}
+
+function persistSourceFormats(formats) {
+  const normalized = normalizeSourceFormats(formats);
+  const isAllFormats = normalized.length === supportedSourceFormats.length;
+  const safeFormats = isAllFormats ? [...supportedSourceFormats] : normalized;
+  try {
+    if (isAllFormats) {
+      localStorage.removeItem(SOURCE_ALLOWED_FORMATS_PREF_KEY);
+      return safeFormats;
+    }
+    localStorage.setItem(SOURCE_ALLOWED_FORMATS_PREF_KEY, JSON.stringify(safeFormats));
+    return safeFormats;
+  } catch {
+    return safeFormats;
   }
 }
 
@@ -353,12 +464,27 @@ async function convertFileToAvatarImage(file) {
   return safeOutput;
 }
 
+function setCacheClearStatus(message, tone = "") {
+  if (!cacheClearStatus) {
+    return;
+  }
+  cacheClearStatus.textContent = String(message || "");
+  cacheClearStatus.classList.remove("status-success", "status-error");
+  if (tone === "success") {
+    cacheClearStatus.classList.add("status-success");
+  } else if (tone === "error") {
+    cacheClearStatus.classList.add("status-error");
+  }
+}
+
 qualityForm?.addEventListener("submit", (event) => {
   event.preventDefault();
 
   const formData = new FormData(qualityForm);
   const selectedQuality = normalizeStreamQualityPreference(formData.get("quality") || "auto");
   const selectedAvatarChoice = normalizeAvatarChoice(formData.get("avatarStyle") || DEFAULT_AVATAR_STYLE);
+  const selectedSourceMinSeeders = normalizeSourceMinSeeders(formData.get("sourceMinSeeders") || 0);
+  const selectedSourceFormats = readSelectedSourceFormatsFromForm();
 
   const savedQuality = persistSelectedQuality(selectedQuality);
   const savedSubtitleColor = persistSubtitleColorPreference(subtitleColorInput?.value);
@@ -387,14 +513,23 @@ qualityForm?.addEventListener("submit", (event) => {
     savedAvatarChoiceLabel = getAvatarChoiceDisplayLabel(savedStyle);
   }
 
+  const savedSourceMinSeeders = persistSourceMinSeeders(selectedSourceMinSeeders);
+  const savedSourceFormats = persistSourceFormats(selectedSourceFormats);
+  setSelectedSourceFilters(savedSourceMinSeeders, savedSourceFormats);
+
   if (saveStatus) {
     const qualityLabel = savedQuality === "auto" ? "Auto (Best Available)" : savedQuality.toUpperCase();
-    saveStatus.textContent = `Saved: ${qualityLabel}, subtitles ${savedSubtitleColor.toUpperCase()}, icon ${savedAvatarChoiceLabel}`;
+    const formatsLabel = savedSourceFormats.length === supportedSourceFormats.length
+      ? "Any format"
+      : savedSourceFormats.map((value) => value.toUpperCase()).join(", ");
+    const seedsLabel = savedSourceMinSeeders > 0 ? `${savedSourceMinSeeders}+ seeds` : "Any seeds";
+    saveStatus.textContent = `Saved: ${qualityLabel}, subtitles ${savedSubtitleColor.toUpperCase()}, icon ${savedAvatarChoiceLabel}, sources ${seedsLabel}, ${formatsLabel}`;
   }
 });
 
 setSelectedQuality(getStoredStreamQualityPreference());
 setSelectedSubtitleColor(getStoredSubtitleColorPreference());
+setSelectedSourceFilters(getStoredSourceMinSeeders(), getStoredSourceFormats());
 
 const storedAvatarStyle = getStoredAvatarStylePreference();
 const storedAvatarMode = getStoredAvatarModePreference();
@@ -443,5 +578,46 @@ avatarImageInput?.addEventListener("change", async () => {
     }
   } finally {
     avatarImageInput.value = "";
+  }
+});
+
+clearAllCachesBtn?.addEventListener("click", async () => {
+  if (isClearingCaches) {
+    return;
+  }
+
+  const shouldProceed = window.confirm("Clear all server caches for every title?");
+  if (!shouldProceed) {
+    return;
+  }
+
+  isClearingCaches = true;
+  clearAllCachesBtn.disabled = true;
+  setCacheClearStatus("Clearing caches...");
+
+  try {
+    const response = await fetch(`/api/debug/cache?clear=1&t=${Date.now()}`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errorMessage = payload?.error || payload?.message || `Request failed (${response.status})`;
+      throw new Error(errorMessage);
+    }
+
+    const persistent = payload?.caches?.persistentDb || {};
+    const sourceCount = Number(persistent.resolvedStreamSize || 0);
+    const tmdbCount = Number(persistent.tmdbResponseSize || 0);
+    setCacheClearStatus(`Done. Server cache cleared (sources ${sourceCount}, TMDB ${tmdbCount}).`, "success");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to clear cache.";
+    setCacheClearStatus(message, "error");
+  } finally {
+    isClearingCaches = false;
+    clearAllCachesBtn.disabled = false;
   }
 });

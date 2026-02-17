@@ -4,6 +4,9 @@ const playButton = document.getElementById("heroPlay");
 const infoButton = document.getElementById("heroInfo");
 const heroTitle = document.getElementById("heroTitle");
 const pageRoot = document.querySelector(".page");
+const continueRow = document.getElementById("continueRow");
+const continueCardsContainer = document.getElementById("continueCards");
+const continueEmpty = document.getElementById("continueEmpty");
 const cardsContainer = document.getElementById("cardsContainer");
 const accountMenu = document.getElementById("accountMenu");
 const accountMenuToggle = document.getElementById("accountMenuToggle");
@@ -37,6 +40,12 @@ const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
 const PROFILE_AVATAR_STYLE_PREF_KEY = "netflix-profile-avatar-style";
 const PROFILE_AVATAR_MODE_PREF_KEY = "netflix-profile-avatar-mode";
 const PROFILE_AVATAR_IMAGE_PREF_KEY = "netflix-profile-avatar-image";
+const RESUME_STORAGE_PREFIX = "netflix-resume:";
+const CONTINUE_WATCHING_META_KEY = "netflix-continue-watching-meta";
+const JEFFREY_EPSTEIN_SERIES_ID = "jeffrey-epstein-filthy-rich";
+const LOCAL_TATE_LEGACY_SOURCE = "assets/videos/tate-full.mp4";
+const LOCAL_TATE_SOURCE = "assets/videos/local/tate-part-1/video.mp4";
+const LOCAL_TATE_THUMBNAIL = "assets/videos/local/tate-part-1/thumbnail.jpg";
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de"]);
 const supportedStreamQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
 const supportedAvatarStyles = new Set(["blue", "crimson", "emerald", "violet", "amber"]);
@@ -180,6 +189,361 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function formatResumeTimestamp(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function readContinueWatchingMetaMap() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CONTINUE_WATCHING_META_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function isLocalTateSource(sourceIdentity) {
+  const normalizedSource = String(sourceIdentity || "").trim();
+  return normalizedSource === LOCAL_TATE_LEGACY_SOURCE || normalizedSource === LOCAL_TATE_SOURCE;
+}
+
+function extractSeriesIdFromSourceIdentity(sourceIdentity) {
+  const normalizedSource = String(sourceIdentity || "").trim();
+  if (!normalizedSource) {
+    return "";
+  }
+
+  const seriesMatch = /^series:([^:]+):episode:(\d+)$/i.exec(normalizedSource);
+  return seriesMatch ? String(seriesMatch[1] || "").trim().toLowerCase() : "";
+}
+
+function parseTmdbSourceIdentity(sourceIdentity) {
+  const normalizedSource = String(sourceIdentity || "").trim();
+  if (!normalizedSource.toLowerCase().startsWith("tmdb:")) {
+    return { tmdbId: "", mediaType: "" };
+  }
+
+  const typedMatch = /^tmdb:(movie|tv):(\d+)(?::s(\d+):e(\d+))?$/i.exec(normalizedSource);
+  if (typedMatch) {
+    return {
+      mediaType: String(typedMatch[1] || "").trim().toLowerCase(),
+      tmdbId: String(typedMatch[2] || "").trim(),
+    };
+  }
+
+  const legacyMatch = /^tmdb:(\d+)$/i.exec(normalizedSource);
+  if (legacyMatch) {
+    return {
+      mediaType: "movie",
+      tmdbId: String(legacyMatch[1] || "").trim(),
+    };
+  }
+
+  return { tmdbId: "", mediaType: "" };
+}
+
+function inferContinueMediaType(sourceIdentity, explicitMediaType = "", explicitSeriesId = "") {
+  const normalizedExplicitType = String(explicitMediaType || "").trim().toLowerCase();
+  if (normalizedExplicitType === "movie" || normalizedExplicitType === "tv") {
+    return normalizedExplicitType;
+  }
+
+  const seriesId = String(explicitSeriesId || "").trim().toLowerCase()
+    || extractSeriesIdFromSourceIdentity(sourceIdentity);
+  if (seriesId) {
+    return "tv";
+  }
+
+  const parsedSource = parseTmdbSourceIdentity(sourceIdentity);
+  if (parsedSource.mediaType === "movie" || parsedSource.mediaType === "tv") {
+    return parsedSource.mediaType;
+  }
+
+  return "";
+}
+
+function normalizeLocalContinueEntry(entry) {
+  const safeEntry = { ...entry };
+  safeEntry.mediaType = String(safeEntry.mediaType || "").trim().toLowerCase();
+  if (safeEntry.mediaType !== "movie" && safeEntry.mediaType !== "tv") {
+    safeEntry.mediaType = "";
+  }
+  safeEntry.seriesId = String(safeEntry.seriesId || "").trim();
+  safeEntry.episodeIndex = Number.isFinite(Number(safeEntry.episodeIndex))
+    ? Math.max(0, Math.floor(Number(safeEntry.episodeIndex)))
+    : -1;
+  if (!isLocalTateSource(safeEntry.sourceIdentity)) {
+    return safeEntry;
+  }
+
+  safeEntry.title = "Tate - Part 1";
+  safeEntry.episode = "Part 1";
+  safeEntry.thumb = LOCAL_TATE_THUMBNAIL;
+  safeEntry.src = LOCAL_TATE_SOURCE;
+  safeEntry.mediaType = "";
+  safeEntry.tmdbId = "";
+  safeEntry.seriesId = "";
+  safeEntry.episodeIndex = -1;
+  safeEntry.year = safeEntry.year || "2023";
+  return safeEntry;
+}
+
+function removeContinueWatchingEntry(sourceIdentity) {
+  const normalizedSource = String(sourceIdentity || "").trim();
+  if (!normalizedSource) return;
+  const normalizedSeriesId = extractSeriesIdFromSourceIdentity(normalizedSource);
+
+  try {
+    if (normalizedSeriesId) {
+      const seriesResumePrefix = `${RESUME_STORAGE_PREFIX}series:${normalizedSeriesId}:episode:`;
+      const keysToDelete = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key && key.startsWith(seriesResumePrefix)) {
+          keysToDelete.push(key);
+        }
+      }
+      keysToDelete.forEach((key) => localStorage.removeItem(key));
+    } else {
+      localStorage.removeItem(`${RESUME_STORAGE_PREFIX}${normalizedSource}`);
+    }
+
+    const metaMap = readContinueWatchingMetaMap();
+    if (metaMap && typeof metaMap === "object") {
+      if (normalizedSeriesId) {
+        Object.keys(metaMap).forEach((key) => {
+          if (extractSeriesIdFromSourceIdentity(key) === normalizedSeriesId) {
+            delete metaMap[key];
+          }
+        });
+      } else {
+        delete metaMap[normalizedSource];
+      }
+
+      const hasEntries = Object.keys(metaMap).length > 0;
+      if (hasEntries) {
+        localStorage.setItem(CONTINUE_WATCHING_META_KEY, JSON.stringify(metaMap));
+      } else {
+        localStorage.removeItem(CONTINUE_WATCHING_META_KEY);
+      }
+    }
+  } catch {
+    // Ignore storage access issues.
+  }
+}
+
+function getContinueWatchingEntries() {
+  const entriesBySource = new Map();
+  const metaMap = readContinueWatchingMetaMap();
+  const dedupeKeyForSource = (sourceIdentity, explicitSeriesId = "") => {
+    if (isLocalTateSource(sourceIdentity)) {
+      return "local:tate-part-1";
+    }
+    const normalizedSeriesId = String(explicitSeriesId || "").trim().toLowerCase()
+      || extractSeriesIdFromSourceIdentity(sourceIdentity);
+    if (normalizedSeriesId) {
+      return `series:${normalizedSeriesId}`;
+    }
+    return String(sourceIdentity || "").trim();
+  };
+
+  Object.entries(metaMap).forEach(([sourceIdentity, value]) => {
+    const normalizedSource = String(sourceIdentity || "").trim();
+    if (!normalizedSource || typeof value !== "object" || value === null) return;
+
+    const resumeKey = `${RESUME_STORAGE_PREFIX}${normalizedSource}`;
+    const resumeSeconds = Number(localStorage.getItem(resumeKey));
+    if (!Number.isFinite(resumeSeconds) || resumeSeconds < 1) {
+      return;
+    }
+
+    const normalizedEntry = normalizeLocalContinueEntry({
+      sourceIdentity: normalizedSource,
+      resumeSeconds,
+      updatedAt: Number(value.updatedAt) || 0,
+      title: String(value.title || "").trim(),
+      episode: String(value.episode || "").trim(),
+      src: String(value.src || "").trim(),
+      tmdbId: String(value.tmdbId || "").trim() || parseTmdbSourceIdentity(normalizedSource).tmdbId,
+      mediaType: inferContinueMediaType(
+        normalizedSource,
+        String(value.mediaType || "").trim(),
+        String(value.seriesId || "").trim(),
+      ),
+      seriesId: String(value.seriesId || "").trim(),
+      episodeIndex: Number.isFinite(Number(value.episodeIndex))
+        ? Math.max(0, Math.floor(Number(value.episodeIndex)))
+        : -1,
+      year: String(value.year || "").trim(),
+      thumb: String(value.thumb || "").trim(),
+    });
+    const dedupeKey = dedupeKeyForSource(normalizedSource, normalizedEntry.seriesId);
+    const existingEntry = entriesBySource.get(dedupeKey);
+    if (!existingEntry || Number(normalizedEntry.updatedAt || 0) >= Number(existingEntry.updatedAt || 0)) {
+      entriesBySource.set(dedupeKey, normalizedEntry);
+    }
+  });
+
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key || !key.startsWith(RESUME_STORAGE_PREFIX)) {
+      continue;
+    }
+
+    const sourceIdentity = key.slice(RESUME_STORAGE_PREFIX.length).trim();
+    const dedupeCandidateKey = dedupeKeyForSource(sourceIdentity);
+    if (!sourceIdentity || entriesBySource.has(dedupeCandidateKey)) {
+      continue;
+    }
+
+    const resumeSeconds = Number(localStorage.getItem(key));
+    if (!Number.isFinite(resumeSeconds) || resumeSeconds < 1) {
+      continue;
+    }
+
+    const parsedTmdbSource = parseTmdbSourceIdentity(sourceIdentity);
+    const tmdbId = String(parsedTmdbSource.tmdbId || "").trim();
+    const seriesMatch = /^series:([^:]+):episode:(\d+)$/i.exec(sourceIdentity);
+    const inferredSeriesId = seriesMatch ? String(seriesMatch[1] || "").trim() : "";
+    const inferredEpisodeIndex = seriesMatch ? Number(seriesMatch[2]) : -1;
+    const normalizedEntry = normalizeLocalContinueEntry({
+      sourceIdentity,
+      resumeSeconds,
+      updatedAt: 0,
+      title: tmdbId ? "Movie" : "Continue Watching",
+      episode: "",
+      src: (tmdbId || inferredSeriesId) ? "" : sourceIdentity,
+      tmdbId,
+      mediaType: inferContinueMediaType(sourceIdentity, parsedTmdbSource.mediaType, inferredSeriesId),
+      seriesId: inferredSeriesId,
+      episodeIndex: Number.isFinite(inferredEpisodeIndex) ? Math.max(0, Math.floor(inferredEpisodeIndex)) : -1,
+      year: "",
+      thumb: "",
+    });
+    const dedupeKey = dedupeKeyForSource(sourceIdentity, inferredSeriesId);
+    const existingEntry = entriesBySource.get(dedupeKey);
+    if (!existingEntry || Number(normalizedEntry.updatedAt || 0) >= Number(existingEntry.updatedAt || 0)) {
+      entriesBySource.set(dedupeKey, normalizedEntry);
+    }
+  }
+
+  return Array.from(entriesBySource.values())
+    .sort((left, right) => {
+      if (right.updatedAt !== left.updatedAt) {
+        return right.updatedAt - left.updatedAt;
+      }
+      return right.resumeSeconds - left.resumeSeconds;
+    })
+    .slice(0, 12);
+}
+
+function buildContinueWatchingCard(entry, tmdbDetails = null) {
+  const normalizedMediaType = inferContinueMediaType(entry.sourceIdentity, entry.mediaType, entry.seriesId);
+  const isSeriesEntry = normalizedMediaType === "tv";
+  const isPodcastEntry = !tmdbDetails && isLocalTateSource(entry.sourceIdentity);
+  const title = (isSeriesEntry ? (tmdbDetails?.name || tmdbDetails?.title) : (tmdbDetails?.title || tmdbDetails?.name))
+    || entry.title
+    || (isSeriesEntry ? "Series" : "Movie");
+  const releaseDate = isSeriesEntry
+    ? String(tmdbDetails?.first_air_date || tmdbDetails?.release_date || "")
+    : String(tmdbDetails?.release_date || "");
+  const year = releaseDate ? releaseDate.slice(0, 4) : (entry.year || "");
+  const posterPath = tmdbDetails?.poster_path || tmdbDetails?.backdrop_path || "";
+  const backdropPath = tmdbDetails?.backdrop_path || tmdbDetails?.poster_path || "";
+  const posterUrl = posterPath ? `${TMDB_IMAGE_BASE}/w500${posterPath}` : (entry.thumb || "assets/images/thumbnail.jpg");
+  const heroUrl = backdropPath ? `${TMDB_IMAGE_BASE}/original${backdropPath}` : posterUrl;
+  const runtimeMinutes = Number(isSeriesEntry ? tmdbDetails?.episode_run_time?.[0] : tmdbDetails?.runtime) || 0;
+  const estimatedDurationSeconds = runtimeMinutes > 0 ? runtimeMinutes * 60 : 0;
+  const progressPercent = estimatedDurationSeconds > 0
+    ? Math.max(4, Math.min(96, Math.round((entry.resumeSeconds / estimatedDurationSeconds) * 100)))
+    : 24;
+  const genreNames = (tmdbDetails?.genres || []).map((genre) => String(genre?.name || "").trim()).filter(Boolean).slice(0, 3);
+  const tagLine = genreNames.length
+    ? genreNames.map(escapeHtml).join(" <span>&bull;</span> ")
+    : (isPodcastEntry
+      ? "Interview <span>&bull;</span> Longform <span>&bull;</span> Talk"
+      : "Continue <span>&bull;</span> Resume");
+  const safeTitle = escapeHtml(title);
+  const safeDescription = tmdbDetails?.overview || (isPodcastEntry
+    ? "Resume this podcast episode where you left off."
+    : "Resume where you left off.");
+  const maturity = isPodcastEntry ? "18" : (tmdbDetails?.adult ? "18" : "13+");
+  const qualityLabel = isPodcastEntry ? "VIDEO" : "HD";
+  const contentTypeLabel = isPodcastEntry ? "Podcast" : (isSeriesEntry ? "Series" : "Movie");
+  const cast = (tmdbDetails?.credits?.cast || []).slice(0, 4).map((person) => person?.name).filter(Boolean).join(", ");
+
+  const card = document.createElement("article");
+  card.className = "card";
+  card.tabIndex = 0;
+  card.dataset.resumeSource = entry.sourceIdentity;
+  card.dataset.title = title;
+  card.dataset.episode = `Resume at ${formatResumeTimestamp(entry.resumeSeconds)}`;
+  card.dataset.src = entry.src || "";
+  card.dataset.thumb = heroUrl;
+  card.dataset.year = year || (isSeriesEntry ? "Series" : "Movie");
+  card.dataset.runtime = runtimeMinutes > 0 ? formatRuntime(runtimeMinutes) : (isPodcastEntry ? "Episode" : (isSeriesEntry ? "Series" : "Movie"));
+  card.dataset.maturity = maturity;
+  card.dataset.quality = qualityLabel;
+  card.dataset.audio = isPodcastEntry ? "Podcast Audio" : "Stereo";
+  card.dataset.description = safeDescription;
+  card.dataset.cast = cast || "Cast details unavailable.";
+  card.dataset.genres = genreNames.length ? genreNames.join(", ") : (isPodcastEntry ? "Podcast, Interview" : "Movie");
+  card.dataset.vibe = isPodcastEntry ? "Interview, Longform, Conversational" : "Continue watching";
+  card.dataset.tmdbId = entry.tmdbId || "";
+  card.dataset.mediaType = normalizedMediaType || entry.mediaType || "";
+  card.dataset.seriesId = entry.seriesId || "";
+  card.dataset.episodeIndex = Number.isFinite(Number(entry.episodeIndex))
+    ? String(Math.max(0, Math.floor(Number(entry.episodeIndex))))
+    : "-1";
+
+  card.innerHTML = `
+    <div class="card-base">
+      <img src="${posterUrl}" alt="${safeTitle}" loading="lazy" />
+      <div class="progress"><span style="width: ${progressPercent}%"></span></div>
+    </div>
+    <div class="card-hover">
+      <img class="card-hover-image" src="${heroUrl}" alt="${safeTitle} preview" loading="lazy" />
+      <div class="card-hover-body">
+        <div class="card-hover-controls">
+          <div class="card-hover-actions">
+            <button class="hover-round hover-play" type="button" aria-label="Resume ${safeTitle}">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5v17L20 12 5 3.5Z" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Added to my list">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5L19.5 7.5" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button class="hover-round hover-remove" type="button" aria-label="Remove ${safeTitle} from continue watching">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke-linecap="round" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Rate thumbs up">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20H5.8A1.8 1.8 0 0 1 4 18.2V10a1.8 1.8 0 0 1 1.8-1.8H8V20Zm2 0h6a3.5 3.5 0 0 0 3.4-2.8l.8-4A2.5 2.5 0 0 0 17.75 10H14V6.6A2.6 2.6 0 0 0 11.4 4L10 9.3V20Z" /></svg>
+            </button>
+          </div>
+          <button class="hover-round hover-details" type="button" aria-label="More details">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+        </div>
+        <div class="card-hover-meta">
+          <span class="meta-age">${maturity}</span>
+          <span>${card.dataset.episode}</span>
+          <span class="meta-chip">${qualityLabel}</span>
+          <span class="meta-spatial">${contentTypeLabel}</span>
+        </div>
+        <p class="card-hover-tags">${tagLine}</p>
+      </div>
+    </div>
+  `;
+
+  return card;
+}
+
 async function apiFetch(path, params = {}) {
   const query = new URLSearchParams(params);
   const url = query.size ? `${path}?${query.toString()}` : path;
@@ -276,7 +640,7 @@ async function loadPopularTitles() {
   if (!cardsContainer) return;
 
   try {
-    const [payload, darkKnightDetails, inceptionDetails] = await Promise.all([
+    const [payload, darkKnightDetails, inceptionDetails, interstellarDetails] = await Promise.all([
       apiFetch("/api/tmdb/popular-movies", { page: "1" }),
       apiFetch("/api/tmdb/details", {
         tmdbId: "155",
@@ -284,6 +648,10 @@ async function loadPopularTitles() {
       }).catch(() => null),
       apiFetch("/api/tmdb/details", {
         tmdbId: "27205",
+        mediaType: "movie",
+      }).catch(() => null),
+      apiFetch("/api/tmdb/details", {
+        tmdbId: "157336",
         mediaType: "movie",
       }).catch(() => null),
     ]);
@@ -306,6 +674,7 @@ async function loadPopularTitles() {
     const popularMovies = [
       normalizeMovie(darkKnightDetails),
       normalizeMovie(inceptionDetails),
+      normalizeMovie(interstellarDetails),
     ].filter(Boolean);
 
     const imageBase = payload.imageBase || TMDB_IMAGE_BASE;
@@ -325,6 +694,72 @@ async function loadPopularTitles() {
     });
   } catch (error) {
     console.error("Failed to load TMDB popular movie titles:", error);
+  }
+}
+
+async function loadContinueWatching() {
+  if (!continueRow || !continueCardsContainer) {
+    return;
+  }
+
+  const entries = getContinueWatchingEntries();
+  if (!entries.length) {
+    continueCardsContainer.innerHTML = "";
+    if (continueEmpty) {
+      continueEmpty.hidden = false;
+    }
+    continueRow.hidden = true;
+    return;
+  }
+
+  const tmdbDetailKeys = Array.from(new Set(entries
+    .map((entry) => {
+      const tmdbId = String(entry.tmdbId || "").trim();
+      if (!tmdbId) {
+        return "";
+      }
+      const mediaType = inferContinueMediaType(entry.sourceIdentity, entry.mediaType, entry.seriesId) || "movie";
+      return `${mediaType}:${tmdbId}`;
+    })
+    .filter(Boolean)));
+
+  const detailsMap = new Map();
+  await Promise.all(tmdbDetailKeys.map(async (detailKey) => {
+    try {
+      const separatorIndex = detailKey.indexOf(":");
+      if (separatorIndex <= 0) {
+        return;
+      }
+      const mediaType = detailKey.slice(0, separatorIndex);
+      const tmdbId = detailKey.slice(separatorIndex + 1);
+      const details = await apiFetch("/api/tmdb/details", {
+        tmdbId,
+        mediaType,
+      });
+      if (details && typeof details === "object") {
+        detailsMap.set(detailKey, details);
+      }
+    } catch {
+      // Best-effort enrichment only.
+    }
+  }));
+
+  continueCardsContainer.innerHTML = "";
+  entries.forEach((entry, index) => {
+    const normalizedMediaType = inferContinueMediaType(entry.sourceIdentity, entry.mediaType, entry.seriesId) || "movie";
+    const detailsLookupKey = entry.tmdbId ? `${normalizedMediaType}:${String(entry.tmdbId).trim()}` : "";
+    const details = detailsLookupKey ? detailsMap.get(detailsLookupKey) || null : null;
+    const card = buildContinueWatchingCard(entry, details);
+    if (index >= Math.max(1, entries.length - 2)) {
+      card.classList.add("card--align-right");
+    }
+    continueCardsContainer.appendChild(card);
+    attachCardInteractions(card);
+  });
+
+  continueRow.hidden = false;
+  if (continueEmpty) {
+    continueEmpty.hidden = true;
   }
 }
 
@@ -383,7 +818,7 @@ infoButton.addEventListener("click", () => {
   document.getElementById("continueRow").scrollIntoView({ behavior: "smooth", block: "center" });
 });
 
-function openPlayerPage({ title, episode, src, tmdbId, mediaType, year }) {
+function openPlayerPage({ title, episode, src, tmdbId, mediaType, year, seriesId, episodeIndex }) {
   const params = new URLSearchParams({
     title: title || "Title",
     episode: episode || "Now Playing",
@@ -405,6 +840,16 @@ function openPlayerPage({ title, episode, src, tmdbId, mediaType, year }) {
     params.set("year", year);
   }
 
+  const normalizedSeriesId = String(seriesId || "").trim();
+  if (normalizedSeriesId) {
+    params.set("seriesId", normalizedSeriesId);
+  }
+
+  const parsedEpisodeIndex = Number(episodeIndex);
+  if (Number.isFinite(parsedEpisodeIndex) && parsedEpisodeIndex >= 0) {
+    params.set("episodeIndex", String(Math.floor(parsedEpisodeIndex)));
+  }
+
   if (!src && tmdbId && mediaType === "movie") {
     const preferredAudioLang = getStoredAudioLangForTmdbMovie(tmdbId);
     const preferredQuality = getStoredStreamQualityPreference();
@@ -416,7 +861,7 @@ function openPlayerPage({ title, episode, src, tmdbId, mediaType, year }) {
     }
   }
 
-  if (!src && !tmdbId) {
+  if (!src && !tmdbId && !normalizedSeriesId) {
     params.set("src", "assets/videos/intro.mp4");
   }
 
@@ -424,12 +869,15 @@ function openPlayerPage({ title, episode, src, tmdbId, mediaType, year }) {
 }
 
 function getCardDetails(card) {
+  const rawEpisodeIndex = Number(card.dataset.episodeIndex || -1);
   return {
     title: card.dataset.title || "Title",
     episode: card.dataset.episode || "Now Playing",
     src: card.dataset.src || "",
     tmdbId: card.dataset.tmdbId || "",
     mediaType: card.dataset.mediaType || "",
+    seriesId: card.dataset.seriesId || "",
+    episodeIndex: Number.isFinite(rawEpisodeIndex) ? rawEpisodeIndex : -1,
     year: card.dataset.year || "",
   };
 }
@@ -565,8 +1013,9 @@ function closeDetailsModal({ restoreFocus = true } = {}) {
 if (heroTitle) {
   const heroDestination = {
     title: "Jeffrey Epstein: Filthy Rich",
-    episode: "Official Trailer",
-    src: "assets/videos/intro.mp4",
+    episode: "E1 Hunting Grounds",
+    seriesId: JEFFREY_EPSTEIN_SERIES_ID,
+    episodeIndex: 0,
   };
 
   heroTitle.style.cursor = "pointer";
@@ -614,6 +1063,26 @@ function attachCardInteractions(card) {
     event.stopPropagation();
     event.preventDefault();
     openDetailsModal(card, hoverDetailsButton);
+  });
+
+  const hoverRemoveButton = card.querySelector(".hover-remove");
+  hoverRemoveButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+
+    const resumeSource = String(card.dataset.resumeSource || "").trim()
+      || (
+        card.dataset.tmdbId && card.dataset.mediaType === "movie"
+          ? `tmdb:${String(card.dataset.tmdbId).trim()}`
+          : String(card.dataset.src || "").trim()
+      );
+
+    if (!resumeSource) {
+      return;
+    }
+
+    removeContinueWatchingEntry(resumeSource);
+    void loadContinueWatching();
   });
 }
 
@@ -692,6 +1161,7 @@ document.addEventListener("pointerdown", (event) => {
 
 syncMuteUI();
 syncPlayButtonUI();
+void loadContinueWatching();
 loadPopularTitles();
 applyAccountAvatarStyle();
 closeAccountMenu();
@@ -699,8 +1169,21 @@ closeAccountMenu();
 pageRoot?.focus();
 
 window.addEventListener("storage", (event) => {
-  if (event.key && event.key !== PROFILE_AVATAR_STYLE_PREF_KEY && event.key !== PROFILE_AVATAR_MODE_PREF_KEY && event.key !== PROFILE_AVATAR_IMAGE_PREF_KEY) {
+  if (!event.key) {
+    applyAccountAvatarStyle();
+    void loadContinueWatching();
     return;
   }
-  applyAccountAvatarStyle();
+
+  if (
+    event.key === PROFILE_AVATAR_STYLE_PREF_KEY
+    || event.key === PROFILE_AVATAR_MODE_PREF_KEY
+    || event.key === PROFILE_AVATAR_IMAGE_PREF_KEY
+  ) {
+    applyAccountAvatarStyle();
+  }
+
+  if (event.key === CONTINUE_WATCHING_META_KEY || event.key.startsWith(RESUME_STORAGE_PREFIX)) {
+    void loadContinueWatching();
+  }
 });

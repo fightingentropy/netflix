@@ -84,12 +84,12 @@ Current environment variables:
 - `HLS_HWACCEL`:
   - `none | auto | videotoolbox | cuda | qsv`
   - `auto` maps to `videotoolbox` on macOS, else `none`
-- `AUTO_AUDIO_SYNC` (`0/1` style)
+- `AUTO_AUDIO_SYNC` (`0/1` style, default: `1`)
 - `PLAYBACK_SESSIONS` (`0/1` style)
 
 Operational notes:
 
-- Auto A/V correction in `/api/remux` is controlled by `AUTO_AUDIO_SYNC`.
+- Auto A/V correction in `/api/remux` is controlled by `AUTO_AUDIO_SYNC` and defaults to enabled when unset.
 - Playback session persistence can be enabled server-side via `PLAYBACK_SESSIONS`, but the current player client currently does not send session progress updates (see section 13).
 
 ## 5. Frontend Behavior
@@ -421,6 +421,7 @@ Heuristic:
 
 - compute effective offset
 - if in expected range, apply delay correction
+- no fixed additive bias is applied to computed offset
 - clamp final shift to `[-2500, 2500]` ms
 
 FFmpeg filter application:
@@ -540,7 +541,7 @@ If subtitles do not appear:
 If A/V sync feels off:
 
 1. verify playback is using `/api/remux` path (auto-sync applied there)
-2. check remux response headers (`X-Audio-*`)
+2. check remux response headers (`X-Audio-*`) and confirm `X-Auto-Audio-Sync-Enabled: 1`
 3. refresh source and clear stale cache entries when needed
 
 If HLS is unstable on machine:

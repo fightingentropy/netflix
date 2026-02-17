@@ -52,6 +52,33 @@
 
           <div class="controls-right">
             <div class="controls-cluster">
+              <button id="nextEpisode" class="control-btn series-control-btn" type="button" aria-label="Next episode" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 5.5v13l11-6.5-11-6.5Zm13 .2h3v12.6h-3z" />
+                </svg>
+              </button>
+              <div id="episodesControl" class="speed-menu-wrap episodes-menu-wrap" hidden>
+                <button
+                  id="toggleEpisodes"
+                  class="control-btn episodes-btn"
+                  type="button"
+                  aria-label="Episodes"
+                  aria-haspopup="dialog"
+                  aria-controls="episodesMenu"
+                  aria-expanded="false"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 6h12v4H4zm0 8h16v4H4zm14-8h2v4h-2zM4 10h16v1.6H4zM4 18h16v1.6H4z" />
+                  </svg>
+                </button>
+                <div id="episodesMenu" class="speed-popover episodes-popover" role="dialog" aria-label="Episodes">
+                  <div class="episodes-popover-head">
+                    <p class="episodes-overline">Limited Series</p>
+                    <h2 id="episodesPopoverTitle" class="episodes-popover-title">Episodes</h2>
+                  </div>
+                  <div id="episodesList" class="episodes-list" role="list"></div>
+                </div>
+              </div>
               <div id="audioControl" class="speed-menu-wrap audio-menu-wrap">
                 <button
                   id="toggleAudio"
@@ -81,6 +108,10 @@
                       <div id="subtitleOptions" class="audio-options subtitle-options">
                         <button class="audio-option subtitle-option" type="button" role="option" data-subtitle-lang="off" aria-selected="true">Off</button>
                       </div>
+                      <section id="sourcePanel" class="audio-source-panel" aria-labelledby="sourceOptionsTitle">
+                        <h3 id="sourceOptionsTitle" class="audio-column-title audio-source-title">Sources</h3>
+                        <div id="sourceOptions" class="audio-options source-options" role="listbox" aria-label="Playback sources"></div>
+                      </section>
                     </section>
                   </div>
                 </div>

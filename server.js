@@ -82,6 +82,7 @@ const inFlightExternalSubtitleBuilds = new Map();
 const hlsTranscodeJobs = new Map();
 const externalSubtitleLookupCache = new Map();
 const CACHE_SWEEP_INTERVAL_MS = 60 * 1000;
+const SERVER_IDLE_TIMEOUT_SECONDS = 240;
 const SERVER_STARTED_AT = Date.now();
 const FFMPEG_CAPABILITY_REFRESH_MS = 5 * 60 * 1000;
 let persistentCacheDb = null;
@@ -1534,6 +1535,17 @@ function chooseAudioTrackFromProbe(probe, preferredLang) {
   return audioTracks.find((track) => track.isDefault) || audioTracks[0];
 }
 
+function isLikelyForcedSubtitleTrack(track) {
+  const labelText = String(track?.label || "").toLowerCase();
+  const titleText = String(track?.title || "").toLowerCase();
+  const combined = `${labelText} ${titleText}`;
+  return (
+    combined.includes("forced")
+    || combined.includes("foreign")
+    || combined.includes("sign")
+  );
+}
+
 function chooseSubtitleTrackFromProbe(probe, preferredSubtitleLang) {
   const subtitles = Array.isArray(probe?.subtitleTracks) ? probe.subtitleTracks : [];
   if (!subtitles.length) {
@@ -1545,18 +1557,37 @@ function chooseSubtitleTrackFromProbe(probe, preferredSubtitleLang) {
     return null;
   }
 
-  const match = subtitles.find((track) => (
+  const languageMatches = subtitles.filter((track) => (
     track.language === normalized
     && track.isTextBased
     && !isExternalSubtitleTrack(track)
   ));
-  if (match) {
-    return match;
+  if (languageMatches.length) {
+    const nonForcedMatch = languageMatches.find((track) => !isLikelyForcedSubtitleTrack(track));
+    return nonForcedMatch || languageMatches[0];
+  }
+
+  const defaultMatches = subtitles.filter((track) => (
+    track.isDefault
+    && track.isTextBased
+    && !isExternalSubtitleTrack(track)
+  ));
+  if (defaultMatches.length) {
+    const nonForcedDefault = defaultMatches.find((track) => !isLikelyForcedSubtitleTrack(track));
+    return nonForcedDefault || defaultMatches[0];
+  }
+
+  const fallbackTextTrack = subtitles.find((track) => (
+    track.isTextBased
+    && !isExternalSubtitleTrack(track)
+    && !isLikelyForcedSubtitleTrack(track)
+  ));
+  if (fallbackTextTrack) {
+    return fallbackTextTrack;
   }
 
   return subtitles.find((track) => (
-    track.isDefault
-    && track.isTextBased
+    track.isTextBased
     && !isExternalSubtitleTrack(track)
   )) || null;
 }
@@ -2464,7 +2495,7 @@ async function createFfmpegProxyResponse(
         offsetSeconds = Math.max(offsetSeconds, safetyOffset);
       }
       if (Number.isFinite(offsetSeconds) && offsetSeconds > 0.01 && offsetSeconds < 1.5) {
-        autoAudioDelayMs = Math.round((offsetSeconds + 0.22) * 1000);
+        autoAudioDelayMs = Math.round(offsetSeconds * 1000);
       }
     } catch {
       autoAudioDelayMs = 0;
@@ -2770,6 +2801,52 @@ function parseSeedCount(streamTitle) {
   return Number(match[1].replace(/[^0-9]/g, "")) || 0;
 }
 
+const SUPPORTED_SOURCE_FORMATS = new Set(["mp4", "mkv", "m3u8", "ts", "avi", "wmv"]);
+
+function normalizeSourceHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return /^[a-f0-9]{40}$/.test(normalized) ? normalized : "";
+}
+
+function getStreamInfoHash(stream) {
+  return normalizeSourceHash(stream?.infoHash);
+}
+
+function prioritizeCandidatesBySourceHash(candidates, rankedPool, sourceHash, limit = 10) {
+  const normalizedHash = normalizeSourceHash(sourceHash);
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 10));
+  if (!normalizedHash) {
+    return candidates.slice(0, safeLimit);
+  }
+
+  const dedupByHash = (list = []) => {
+    const seen = new Set();
+    const output = [];
+    list.forEach((item) => {
+      const hash = getStreamInfoHash(item);
+      if (!hash || seen.has(hash)) {
+        return;
+      }
+      seen.add(hash);
+      output.push(item);
+    });
+    return output;
+  };
+
+  const baseList = dedupByHash(candidates);
+  const selectedFromBase = baseList.find((item) => getStreamInfoHash(item) === normalizedHash) || null;
+  if (selectedFromBase) {
+    return [selectedFromBase, ...baseList.filter((item) => item !== selectedFromBase)].slice(0, safeLimit);
+  }
+
+  const selectedFromPool = dedupByHash(rankedPool).find((item) => getStreamInfoHash(item) === normalizedHash) || null;
+  if (!selectedFromPool) {
+    return baseList.slice(0, safeLimit);
+  }
+
+  return [selectedFromPool, ...baseList].slice(0, safeLimit);
+}
+
 function normalizePreferredAudioLang(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized || normalized === "auto") return "auto";
@@ -2784,6 +2861,58 @@ function normalizePreferredStreamQuality(value) {
   if (normalized === "1080") return "1080p";
   if (normalized === "720") return "720p";
   return normalized in STREAM_QUALITY_TARGETS ? normalized : "auto";
+}
+
+function normalizePreferredContainer(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto") return "auto";
+  if (normalized === "mp4") return "mp4";
+  return "auto";
+}
+
+function normalizeMinimumSeeders(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(50000, Math.floor(parsed)));
+}
+
+function normalizeAllowedFormats(value) {
+  const sourceValues = Array.isArray(value)
+    ? value
+    : String(value || "")
+      .split(/[,\s]+/g)
+      .filter(Boolean);
+  const normalized = sourceValues
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => SUPPORTED_SOURCE_FORMATS.has(item));
+  return [...new Set(normalized)];
+}
+
+function applySourceStreamFilters(streams = [], { minSeeders = 0, allowedFormats = [] } = {}) {
+  const safeMinSeeders = normalizeMinimumSeeders(minSeeders);
+  const safeAllowedFormats = normalizeAllowedFormats(allowedFormats);
+  const hasSeedFilter = safeMinSeeders > 0;
+  const hasFormatFilter = safeAllowedFormats.length > 0;
+
+  if (!hasSeedFilter && !hasFormatFilter) {
+    return streams;
+  }
+
+  const allowedFormatSet = new Set(safeAllowedFormats);
+  return streams.filter((stream) => {
+    if (hasSeedFilter && parseSeedCount(stream?.title || stream?.name || "") < safeMinSeeders) {
+      return false;
+    }
+    if (hasFormatFilter) {
+      const container = inferStreamContainerLabel(stream);
+      if (!container || !allowedFormatSet.has(container)) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 function scoreStreamLanguagePreference(stream, preferredAudioLang) {
@@ -3006,6 +3135,222 @@ function scoreStreamQuality(stream, metadata = {}, preferredAudioLang = "auto", 
   );
 }
 
+function sortMovieCandidates(streams, metadata, preferredAudioLang, preferredQuality) {
+  return [...streams]
+    .sort((left, right) => {
+      const rightScore = scoreStreamQuality(right, metadata, preferredAudioLang, preferredQuality);
+      const leftScore = scoreStreamQuality(left, metadata, preferredAudioLang, preferredQuality);
+      if (rightScore !== leftScore) {
+        return rightScore - leftScore;
+      }
+      return parseSeedCount(right.title) - parseSeedCount(left.title);
+    });
+}
+
+function sortEpisodeCandidates(streams, metadata, preferredAudioLang, preferredQuality) {
+  return [...streams]
+    .sort((left, right) => {
+      const rightScore = (
+        scoreStreamQuality(right, metadata, preferredAudioLang, preferredQuality)
+        + scoreStreamEpisodeMatch(right, metadata.seasonNumber, metadata.episodeNumber)
+      );
+      const leftScore = (
+        scoreStreamQuality(left, metadata, preferredAudioLang, preferredQuality)
+        + scoreStreamEpisodeMatch(left, metadata.seasonNumber, metadata.episodeNumber)
+      );
+      if (rightScore !== leftScore) {
+        return rightScore - leftScore;
+      }
+      return parseSeedCount(right.title) - parseSeedCount(left.title);
+    });
+}
+
+function selectTopMovieCandidates(
+  streams,
+  metadata,
+  preferredAudioLang,
+  preferredQuality,
+  sourceHash = "",
+  limit = 10,
+  sourceFilters = {},
+) {
+  const rankedPool = streams.filter((stream) => stream && getStreamInfoHash(stream));
+  const filteredPool = applySourceStreamFilters(rankedPool, sourceFilters);
+  if (!filteredPool.length) {
+    return [];
+  }
+  const qualityFilteredCandidates = filterStreamsByQualityPreference(filteredPool, preferredQuality);
+  const sorted = sortMovieCandidates(qualityFilteredCandidates, metadata, preferredAudioLang, preferredQuality);
+  const capped = sorted.slice(0, Math.max(1, Math.floor(Number(limit) || 10)));
+  return prioritizeCandidatesBySourceHash(capped, sorted, sourceHash, Math.max(1, Math.floor(Number(limit) || 10)));
+}
+
+function selectTopEpisodeCandidates(
+  streams,
+  metadata,
+  preferredAudioLang,
+  preferredQuality,
+  preferredContainer = "auto",
+  sourceHash = "",
+  limit = 10,
+  sourceFilters = {},
+) {
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 10));
+  const rankedPool = streams.filter((stream) => stream && getStreamInfoHash(stream));
+  const filteredPool = applySourceStreamFilters(rankedPool, sourceFilters);
+  if (!filteredPool.length) {
+    return [];
+  }
+  const qualityFilteredCandidates = filterStreamsByQualityPreference(filteredPool, preferredQuality);
+  const sorted = sortEpisodeCandidates(qualityFilteredCandidates, metadata, preferredAudioLang, preferredQuality);
+  const selectedTop = prioritizeCandidatesBySourceHash(sorted.slice(0, safeLimit), sorted, sourceHash, safeLimit);
+
+  if (preferredContainer !== "mp4") {
+    return selectedTop;
+  }
+
+  const mp4Hinted = selectedTop.filter((stream) => isStreamLikelyContainer(stream, "mp4"));
+  if (!mp4Hinted.length) {
+    return selectedTop;
+  }
+
+  return [
+    ...mp4Hinted,
+    ...selectedTop.filter((stream) => !mp4Hinted.includes(stream)),
+  ];
+}
+
+function hasUrlLikeContainerExtension(value, container = "mp4") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (container === "mp4") {
+    return /\.mp4(?:$|[?#&/])/i.test(normalized);
+  }
+
+  return false;
+}
+
+function isStreamLikelyContainer(stream, container = "mp4") {
+  const streamText = [
+    stream?.name,
+    stream?.title,
+    stream?.description,
+    stream?.behaviorHints?.filename,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (!streamText) {
+    return false;
+  }
+
+  if (container === "mp4") {
+    if (/\.mp4\b/.test(streamText)) {
+      return true;
+    }
+    if (/\.(mkv|avi|wmv|ts|m3u8)\b/.test(streamText)) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function inferStreamContainerLabel(stream) {
+  const streamText = [
+    stream?.behaviorHints?.filename,
+    stream?.title,
+    stream?.name,
+    stream?.description,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (!streamText) {
+    return "";
+  }
+  if (/\.mp4\b/.test(streamText)) return "mp4";
+  if (/\.mkv\b/.test(streamText)) return "mkv";
+  if (/\.avi\b/.test(streamText)) return "avi";
+  if (/\.wmv\b/.test(streamText)) return "wmv";
+  if (/\.m3u8\b/.test(streamText)) return "m3u8";
+  if (/\.ts\b/.test(streamText)) return "ts";
+  return "";
+}
+
+function extractStreamTitleLines(stream) {
+  return String(stream?.title || "")
+    .split("\n")
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+}
+
+function extractStreamSizeLabel(stream) {
+  const streamText = String(stream?.title || "");
+  const match = streamText.match(/💾\s*([^\n⚙👤]+)/u);
+  return String(match?.[1] || "").replace(/\s+/g, " ").trim();
+}
+
+function extractStreamReleaseGroup(stream) {
+  const streamText = String(stream?.title || "");
+  const match = streamText.match(/⚙\s*([^\n👤]+)/u);
+  return String(match?.[1] || "")
+    .replace(/\s+/g, " ")
+    .replace(/^[^a-z0-9]+/i, "")
+    .trim();
+}
+
+function summarizeStreamCandidateForClient(stream, metadata = {}, preferredAudioLang = "auto", preferredQuality = "auto") {
+  const infoHash = getStreamInfoHash(stream);
+  if (!infoHash) {
+    return null;
+  }
+
+  const titleLines = extractStreamTitleLines(stream);
+  const filename = String(stream?.behaviorHints?.filename || "").trim();
+  const primary = filename || titleLines[0] || String(stream?.name || "").trim() || "Source";
+  const provider = String(stream?.name || "").replace(/\s+/g, " ").trim();
+  const seeders = parseSeedCount(stream?.title || stream?.name || "");
+  const resolution = parseStreamVerticalResolution(stream);
+  const container = inferStreamContainerLabel(stream);
+  const score = scoreStreamQuality(stream, metadata, preferredAudioLang, preferredQuality);
+  const episodeMatchBonus = metadata?.episodeNumber
+    ? scoreStreamEpisodeMatch(stream, metadata.seasonNumber, metadata.episodeNumber)
+    : 0;
+
+  return {
+    sourceHash: infoHash,
+    infoHash,
+    provider,
+    primary,
+    filename,
+    qualityLabel: resolution > 0 ? `${resolution}p` : "",
+    container,
+    seeders,
+    size: extractStreamSizeLabel(stream),
+    releaseGroup: extractStreamReleaseGroup(stream),
+    score: score + episodeMatchBonus,
+  };
+}
+
+function isResolvedSourceLikelyContainer(resolvedSource, container = "mp4") {
+  const playableUrl = String(resolvedSource?.playableUrl || "").trim();
+  const sourceInput = extractPlayableSourceInput(playableUrl);
+  const candidates = [
+    String(resolvedSource?.filename || "").trim(),
+    playableUrl,
+    sourceInput,
+    ...(Array.isArray(resolvedSource?.fallbackUrls) ? resolvedSource.fallbackUrls : []),
+  ];
+
+  return candidates.some((candidate) => hasUrlLikeContainerExtension(candidate, container));
+}
+
 function normalizeTextForMatch(value) {
   return String(value || "")
     .toLowerCase()
@@ -3093,7 +3438,7 @@ function buildMagnetUri(stream, fallbackName) {
   return `magnet:?${parts.join("&")}`;
 }
 
-function pickVideoFileIds(files, preferredFilename) {
+function pickVideoFileIds(files, preferredFilename, fallbackName = "") {
   const list = Array.isArray(files) ? files.filter((file) => Number.isInteger(file?.id)) : [];
   if (!list.length) {
     return [];
@@ -3114,6 +3459,20 @@ function pickVideoFileIds(files, preferredFilename) {
     const preferredFile = videoFiles.find((file) => String(file.path || "").toLowerCase().includes(preferredNeedle));
     if (preferredFile) {
       return [preferredFile.id];
+    }
+  }
+
+  const fallbackEpisodeSignatures = collectEpisodeSignatures(fallbackName);
+  if (fallbackEpisodeSignatures.length) {
+    const episodeMatchedFile = videoFiles.find((file) => {
+      const fileSignatures = collectEpisodeSignatures(String(file.path || ""));
+      if (!fileSignatures.length) {
+        return false;
+      }
+      return fallbackEpisodeSignatures.some((signature) => fileSignatures.includes(signature));
+    });
+    if (episodeMatchedFile) {
+      return [episodeMatchedFile.id];
     }
   }
 
@@ -5247,12 +5606,23 @@ async function resolveMovieWithDedup(tmdbMovieId, context = {}) {
   const effectivePreferredAudioLang = resolveEffectivePreferredAudioLang(tmdbMovieId, context.preferredAudioLang);
   const effectivePreferredQuality = normalizePreferredStreamQuality(context.preferredQuality);
   const effectivePreferredSubtitleLang = normalizeSubtitlePreference(context.preferredSubtitleLang || "");
+  const forcedSourceHash = normalizeSourceHash(context.sourceHash);
+  const effectiveMinSeeders = normalizeMinimumSeeders(context.minSeeders);
+  const effectiveAllowedFormats = normalizeAllowedFormats(context.allowedFormats);
   const effectiveContext = {
     ...context,
     preferredAudioLang: effectivePreferredAudioLang,
     preferredQuality: effectivePreferredQuality,
     preferredSubtitleLang: effectivePreferredSubtitleLang,
+    sourceHash: forcedSourceHash,
+    minSeeders: effectiveMinSeeders,
+    allowedFormats: effectiveAllowedFormats,
   };
+
+  if (forcedSourceHash || effectiveMinSeeders > 0 || effectiveAllowedFormats.length) {
+    return resolveTmdbMovieViaRealDebrid(tmdbMovieId, effectiveContext);
+  }
+
   const dedupKey = buildMovieResolveKey(tmdbMovieId, effectivePreferredAudioLang, effectivePreferredQuality);
   const reusableSession = await getReusablePlaybackSession(tmdbMovieId, effectiveContext);
   if (reusableSession) {
@@ -5322,7 +5692,7 @@ async function resolveCandidateStream(stream, fallbackName) {
 
   const resolveFromTorrentId = async (candidateTorrentId) => {
     const info = await rdFetch(`/torrents/info/${candidateTorrentId}`);
-    const fileIds = pickVideoFileIds(info?.files || [], preferredFilename);
+    const fileIds = pickVideoFileIds(info?.files || [], preferredFilename, fallbackName);
     const selectedFile = fileIds.length ? String(fileIds[0]) : "";
 
     await rdFetch(`/torrents/selectFiles/${candidateTorrentId}`, {
@@ -5502,6 +5872,327 @@ async function fetchTorrentioMovieStreams(imdbId) {
   return Array.isArray(payload?.streams) ? payload.streams : [];
 }
 
+function normalizeEpisodeOrdinal(value, fallback = 1) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  const floored = Math.floor(parsed);
+  return floored >= 1 ? floored : fallback;
+}
+
+function buildEpisodeSignature(seasonNumber, episodeNumber) {
+  const safeSeason = normalizeEpisodeOrdinal(seasonNumber, 1);
+  const safeEpisode = normalizeEpisodeOrdinal(episodeNumber, 1);
+  return `${safeSeason}x${safeEpisode}`;
+}
+
+function collectEpisodeSignatures(rawText) {
+  const text = String(rawText || "").toLowerCase();
+  if (!text) {
+    return [];
+  }
+
+  const signatures = [];
+  const pushSignature = (season, episode) => {
+    const safeSeason = Number(season);
+    const safeEpisode = Number(episode);
+    if (!Number.isFinite(safeSeason) || !Number.isFinite(safeEpisode)) {
+      return;
+    }
+    if (safeSeason < 1 || safeSeason > 99 || safeEpisode < 1 || safeEpisode > 999) {
+      return;
+    }
+    signatures.push(`${safeSeason}x${safeEpisode}`);
+  };
+
+  const sxePattern = /\bs(?:eason\s*)?0*(\d{1,2})\s*[-_. ]?e(?:pisode\s*)?0*(\d{1,3})\b/g;
+  for (const match of text.matchAll(sxePattern)) {
+    pushSignature(match[1], match[2]);
+  }
+
+  const xPattern = /\b0*(\d{1,2})x0*(\d{1,3})\b/g;
+  for (const match of text.matchAll(xPattern)) {
+    pushSignature(match[1], match[2]);
+  }
+
+  return [...new Set(signatures)];
+}
+
+function buildEpisodeMatchText(stream) {
+  return [
+    stream?.name,
+    stream?.title,
+    stream?.description,
+    stream?.behaviorHints?.filename,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function scoreStreamEpisodeMatch(stream, seasonNumber, episodeNumber) {
+  const streamText = buildEpisodeMatchText(stream);
+  if (!streamText) {
+    return 0;
+  }
+
+  const targetSignature = buildEpisodeSignature(seasonNumber, episodeNumber);
+  const signatures = collectEpisodeSignatures(streamText);
+  if (!signatures.length) {
+    return 0;
+  }
+
+  if (signatures.includes(targetSignature)) {
+    return 2800;
+  }
+
+  return -3400;
+}
+
+function doesFilenameLikelyMatchTvEpisode(filename, showTitle, showYear, seasonNumber, episodeNumber) {
+  const normalizedFilename = normalizeTextForMatch(filename);
+  if (!normalizedFilename) {
+    return true;
+  }
+
+  const targetSignature = buildEpisodeSignature(seasonNumber, episodeNumber);
+  const episodeSignatures = collectEpisodeSignatures(normalizedFilename);
+  if (episodeSignatures.length && !episodeSignatures.includes(targetSignature)) {
+    return false;
+  }
+
+  const titleTokens = tokenizeTitleForMatch(showTitle);
+  if (!titleTokens.length) {
+    return true;
+  }
+
+  const expectedYear = String(showYear || "").trim();
+  const yearMatchesInFilename = normalizedFilename.match(/\b(?:19|20)\d{2}\b/g) || [];
+  const hasExpectedYear = expectedYear && yearMatchesInFilename.includes(expectedYear);
+  const hasConflictingYear = Boolean(
+    expectedYear
+    && yearMatchesInFilename.length
+    && !hasExpectedYear,
+  );
+
+  const matchedTokenCount = titleTokens.reduce((count, token) => {
+    return count + (normalizedFilename.includes(token) ? 1 : 0);
+  }, 0);
+  const requiredTokenMatches = titleTokens.length === 1 ? 1 : Math.min(2, titleTokens.length);
+
+  if (matchedTokenCount >= requiredTokenMatches) {
+    if (!expectedYear) {
+      return true;
+    }
+    if (hasExpectedYear) {
+      return true;
+    }
+    return !hasConflictingYear;
+  }
+
+  if (matchedTokenCount >= 1 && hasExpectedYear) {
+    return true;
+  }
+
+  return false;
+}
+
+async function fetchTvEpisodeMetadata(
+  tmdbTvId,
+  {
+    seasonNumber = 1,
+    episodeNumber = 1,
+    titleFallback = "",
+    yearFallback = "",
+  } = {},
+) {
+  const safeSeasonNumber = normalizeEpisodeOrdinal(seasonNumber, 1);
+  const safeEpisodeNumber = normalizeEpisodeOrdinal(episodeNumber, 1);
+  const [seriesDetails, episodeDetails, externalIds] = await Promise.all([
+    tmdbFetch(`/tv/${tmdbTvId}`),
+    tmdbFetch(`/tv/${tmdbTvId}/season/${safeSeasonNumber}/episode/${safeEpisodeNumber}`),
+    tmdbFetch(`/tv/${tmdbTvId}/external_ids`),
+  ]);
+  const imdbId = String(externalIds?.imdb_id || "").trim();
+  if (!imdbId) {
+    throw new Error("This TMDB series does not expose an IMDb id.");
+  }
+
+  const runtimeMinutes = Number(episodeDetails?.runtime || seriesDetails?.episode_run_time?.[0]);
+  const runtimeSeconds = Number.isFinite(runtimeMinutes) && runtimeMinutes > 0
+    ? Math.round(runtimeMinutes * 60)
+    : 0;
+
+  return {
+    tmdbId: String(tmdbTvId || "").trim(),
+    imdbId,
+    displayTitle: String(seriesDetails?.name || titleFallback || "Series"),
+    displayYear: seriesDetails?.first_air_date ? String(seriesDetails.first_air_date).slice(0, 4) : String(yearFallback || ""),
+    runtimeSeconds,
+    seasonNumber: safeSeasonNumber,
+    episodeNumber: safeEpisodeNumber,
+    episodeTitle: String(episodeDetails?.name || `Episode ${safeEpisodeNumber}`),
+  };
+}
+
+async function fetchTorrentioEpisodeStreams(imdbId, seasonNumber, episodeNumber) {
+  const payload = await requestJson(
+    `${TORRENTIO_BASE_URL}/stream/series/${encodeURIComponent(imdbId)}:${encodeURIComponent(String(seasonNumber))}:${encodeURIComponent(String(episodeNumber))}.json`,
+  );
+  return Array.isArray(payload?.streams) ? payload.streams : [];
+}
+
+async function resolveTmdbTvEpisodeViaRealDebrid(tmdbTvId, context = {}) {
+  const resolutionStartedAt = Date.now();
+  const maxResolutionMs = 90000;
+  const metadata = await fetchTvEpisodeMetadata(tmdbTvId, context);
+  const preferredAudioLang = normalizePreferredAudioLang(context.preferredAudioLang);
+  const preferredSubtitleLang = normalizeSubtitlePreference(context.preferredSubtitleLang || "");
+  const preferredStreamQuality = normalizePreferredStreamQuality(context.preferredQuality);
+  const preferredContainer = normalizePreferredContainer(context.preferredContainer);
+  const sourceHash = normalizeSourceHash(context.sourceHash);
+  const minSeeders = normalizeMinimumSeeders(context.minSeeders);
+  const allowedFormats = normalizeAllowedFormats(context.allowedFormats);
+
+  const streams = await fetchTorrentioEpisodeStreams(
+    metadata.imdbId,
+    metadata.seasonNumber,
+    metadata.episodeNumber,
+  );
+  const candidates = selectTopEpisodeCandidates(
+    streams,
+    metadata,
+    preferredAudioLang,
+    preferredStreamQuality,
+    preferredContainer,
+    sourceHash,
+    10,
+    {
+      minSeeders,
+      allowedFormats,
+    },
+  );
+
+  if (!candidates.length) {
+    throw new Error("No stream candidates were returned for this episode.");
+  }
+
+  const orderedCandidates = candidates;
+
+  const finalizeResolvedCandidate = async (resolved) => {
+    const sourceInput = extractPlayableSourceInput(resolved.playableUrl);
+    let tracks = {
+      durationSeconds: metadata.runtimeSeconds || 0,
+      audioTracks: [],
+      subtitleTracks: [],
+    };
+    let selectedAudioStreamIndex = -1;
+    let selectedSubtitleStreamIndex = -1;
+    const forceAudioStreamMapping = preferredAudioLang !== "auto";
+    try {
+      tracks = await probeMediaTracks(sourceInput, {
+        sourceHash: resolved.sourceHash,
+        selectedFile: resolved.selectedFile,
+      });
+      const audioTrack = chooseAudioTrackFromProbe(tracks, preferredAudioLang);
+      const subtitleTrack = chooseSubtitleTrackFromProbe(tracks, preferredSubtitleLang);
+      selectedAudioStreamIndex = forceAudioStreamMapping && Number.isInteger(audioTrack?.streamIndex)
+        ? audioTrack.streamIndex
+        : -1;
+      selectedSubtitleStreamIndex = Number.isInteger(subtitleTrack?.streamIndex)
+        ? subtitleTrack.streamIndex
+        : -1;
+    } catch {
+      // Track probing is optional; continue playback with best-effort defaults.
+    }
+    tracks = await augmentTracksWithExternalSubtitles(tracks, metadata, preferredSubtitleLang);
+
+    const normalizedPlayable = normalizeResolvedSourceForSoftwareDecode(
+      {
+        ...resolved,
+        sourceInput,
+      },
+      {
+        audioStreamIndex: selectedAudioStreamIndex,
+        subtitleStreamIndex: selectedSubtitleStreamIndex,
+      },
+    );
+
+    return {
+      playableUrl: normalizedPlayable.playableUrl,
+      fallbackUrls: normalizedPlayable.fallbackUrls,
+      filename: normalizedPlayable.filename || resolved.filename,
+      sourceHash: resolved.sourceHash,
+      selectedFile: resolved.selectedFile,
+      sourceInput,
+      tracks,
+      selectedAudioStreamIndex,
+      selectedSubtitleStreamIndex,
+      preferences: {
+        audioLang: preferredAudioLang,
+        subtitleLang: preferredSubtitleLang,
+        quality: preferredStreamQuality,
+      },
+      metadata,
+    };
+  };
+
+  let lastError = null;
+  const deferredContainerCandidates = [];
+  for (let index = 0; index < orderedCandidates.length; index += 1) {
+    if (Date.now() - resolutionStartedAt > maxResolutionMs) {
+      throw lastError || new Error("Timed out resolving a playable source.");
+    }
+
+    const candidate = orderedCandidates[index];
+
+    try {
+      const fallbackName = `${metadata.displayTitle} S${String(metadata.seasonNumber).padStart(2, "0")}E${String(metadata.episodeNumber).padStart(2, "0")}`;
+      const resolved = await resolveCandidateStream(candidate, fallbackName);
+      const filenameMatchesEpisode = doesFilenameLikelyMatchTvEpisode(
+        resolved?.filename,
+        metadata.displayTitle,
+        metadata.displayYear,
+        metadata.seasonNumber,
+        metadata.episodeNumber,
+      );
+      if (!filenameMatchesEpisode) {
+        lastError = new Error("Resolved stream filename did not match requested episode.");
+        continue;
+      }
+
+      if (preferredContainer === "mp4" && !isResolvedSourceLikelyContainer(resolved, preferredContainer)) {
+        deferredContainerCandidates.push(resolved);
+        lastError = new Error("Resolved stream did not match preferred MP4 container.");
+        continue;
+      }
+
+      return await finalizeResolvedCandidate(resolved);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (preferredContainer === "mp4" && deferredContainerCandidates.length) {
+    for (let index = 0; index < deferredContainerCandidates.length; index += 1) {
+      if (Date.now() - resolutionStartedAt > maxResolutionMs) {
+        throw lastError || new Error("Timed out resolving a playable source.");
+      }
+
+      const resolved = deferredContainerCandidates[index];
+      try {
+        return await finalizeResolvedCandidate(resolved);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+
+  throw lastError || new Error("All stream candidates failed.");
+}
+
 async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
   const resolutionStartedAt = Date.now();
   const maxResolutionMs = 90000;
@@ -5514,21 +6205,23 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
     context.preferredSubtitleLang || persistedPreference?.subtitleLang || "",
   );
   const preferredStreamQuality = normalizePreferredStreamQuality(context.preferredQuality);
+  const sourceHash = normalizeSourceHash(context.sourceHash);
+  const minSeeders = normalizeMinimumSeeders(context.minSeeders);
+  const allowedFormats = normalizeAllowedFormats(context.allowedFormats);
 
   const streams = await fetchTorrentioMovieStreams(metadata.imdbId);
-  const rankedPool = streams
-    .filter((stream) => stream && stream.infoHash);
-  const qualityFilteredCandidates = filterStreamsByQualityPreference(rankedPool, preferredStreamQuality);
-  const candidates = qualityFilteredCandidates
-    .sort((left, right) => {
-      const rightScore = scoreStreamQuality(right, metadata, preferredAudioLang, preferredStreamQuality);
-      const leftScore = scoreStreamQuality(left, metadata, preferredAudioLang, preferredStreamQuality);
-      if (rightScore !== leftScore) {
-        return rightScore - leftScore;
-      }
-      return parseSeedCount(right.title) - parseSeedCount(left.title);
-    })
-    .slice(0, 10);
+  const candidates = selectTopMovieCandidates(
+    streams,
+    metadata,
+    preferredAudioLang,
+    preferredStreamQuality,
+    sourceHash,
+    10,
+    {
+      minSeeders,
+      allowedFormats,
+    },
+  );
 
   if (!candidates.length) {
     throw new Error("No stream candidates were returned for this movie.");
@@ -5689,6 +6382,154 @@ async function handleApi(url, request) {
     return json(details);
   }
 
+  if (url.pathname === "/api/resolve/sources") {
+    const tmdbId = (url.searchParams.get("tmdbId") || "").trim();
+    const mediaType = String(url.searchParams.get("mediaType") || "movie").trim().toLowerCase();
+    const titleFallback = (url.searchParams.get("title") || "").trim();
+    const yearFallback = (url.searchParams.get("year") || "").trim();
+    const preferredAudioLang = normalizePreferredAudioLang(url.searchParams.get("audioLang"));
+    const preferredQuality = normalizePreferredStreamQuality(url.searchParams.get("quality"));
+    const preferredContainer = normalizePreferredContainer(url.searchParams.get("preferredContainer"));
+    const sourceHash = normalizeSourceHash(url.searchParams.get("sourceHash"));
+    const minSeeders = normalizeMinimumSeeders(url.searchParams.get("minSeeders"));
+    const allowedFormats = normalizeAllowedFormats(url.searchParams.get("allowedFormats"));
+    const requestedLimit = Number(url.searchParams.get("limit") || 10);
+    const limit = Math.max(1, Math.min(20, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 10));
+
+    if (!/^\d+$/.test(tmdbId)) {
+      return json({ error: "Missing or invalid tmdbId query parameter." }, 400);
+    }
+
+    if (mediaType !== "movie" && mediaType !== "tv") {
+      return json({ error: "Unsupported mediaType. Use movie or tv." }, 400);
+    }
+
+    if (mediaType === "tv") {
+      const seasonNumber = normalizeEpisodeOrdinal(url.searchParams.get("seasonNumber") || url.searchParams.get("season"), 1);
+      const episodeNumber = normalizeEpisodeOrdinal(url.searchParams.get("episodeNumber") || url.searchParams.get("episodeOrdinal"), 1);
+      const metadata = await fetchTvEpisodeMetadata(tmdbId, {
+        titleFallback,
+        yearFallback,
+        seasonNumber,
+        episodeNumber,
+      });
+      const streams = await fetchTorrentioEpisodeStreams(
+        metadata.imdbId,
+        metadata.seasonNumber,
+        metadata.episodeNumber,
+      );
+      const candidates = selectTopEpisodeCandidates(
+        streams,
+        metadata,
+        preferredAudioLang,
+        preferredQuality,
+        preferredContainer,
+        sourceHash,
+        limit,
+        {
+          minSeeders,
+          allowedFormats,
+        },
+      );
+      const sources = candidates
+        .map((candidate) => summarizeStreamCandidateForClient(candidate, metadata, preferredAudioLang, preferredQuality))
+        .filter(Boolean);
+      return json({
+        mediaType: "tv",
+        tmdbId,
+        seasonNumber: metadata.seasonNumber,
+        episodeNumber: metadata.episodeNumber,
+        sources,
+      });
+    }
+
+    const metadata = await fetchMovieMetadata(tmdbId, {
+      titleFallback,
+      yearFallback,
+    });
+    const streams = await fetchTorrentioMovieStreams(metadata.imdbId);
+    const candidates = selectTopMovieCandidates(
+      streams,
+      metadata,
+      preferredAudioLang,
+      preferredQuality,
+      sourceHash,
+      limit,
+      {
+        minSeeders,
+        allowedFormats,
+      },
+    );
+    const sources = candidates
+      .map((candidate) => summarizeStreamCandidateForClient(candidate, metadata, preferredAudioLang, preferredQuality))
+      .filter(Boolean);
+    return json({
+      mediaType: "movie",
+      tmdbId,
+      sources,
+    });
+  }
+
+  if (url.pathname === "/api/resolve/tv") {
+    const tmdbId = (url.searchParams.get("tmdbId") || "").trim();
+    const titleFallback = (url.searchParams.get("title") || "").trim();
+    const yearFallback = (url.searchParams.get("year") || "").trim();
+    const seasonNumber = normalizeEpisodeOrdinal(url.searchParams.get("seasonNumber") || url.searchParams.get("season"), 1);
+    const episodeNumber = normalizeEpisodeOrdinal(url.searchParams.get("episodeNumber") || url.searchParams.get("episodeOrdinal"), 1);
+    const preferredAudioLang = normalizePreferredAudioLang(url.searchParams.get("audioLang"));
+    const preferredQuality = normalizePreferredStreamQuality(url.searchParams.get("quality"));
+    const preferredSubtitleLang = normalizeSubtitlePreference(url.searchParams.get("subtitleLang"));
+    const preferredContainer = normalizePreferredContainer(url.searchParams.get("preferredContainer"));
+    const sourceHash = normalizeSourceHash(url.searchParams.get("sourceHash"));
+    const minSeeders = normalizeMinimumSeeders(url.searchParams.get("minSeeders"));
+    const allowedFormats = normalizeAllowedFormats(url.searchParams.get("allowedFormats"));
+
+    if (!/^\d+$/.test(tmdbId)) {
+      return json({ error: "Missing or invalid tmdbId query parameter." }, 400);
+    }
+
+    const resolved = await resolveTmdbTvEpisodeViaRealDebrid(tmdbId, {
+      titleFallback,
+      yearFallback,
+      seasonNumber,
+      episodeNumber,
+      preferredAudioLang,
+      preferredQuality,
+      preferredSubtitleLang,
+      preferredContainer,
+      sourceHash,
+      minSeeders,
+      allowedFormats,
+    });
+    const resolvedSourceInput = String(resolved?.sourceInput || extractPlayableSourceInput(resolved?.playableUrl || "")).trim();
+    const selectedSubtitleStreamIndex = Number(resolved?.selectedSubtitleStreamIndex || -1);
+    if (resolvedSourceInput) {
+      const prewarmIndices = new Set();
+      if (Number.isFinite(selectedSubtitleStreamIndex) && selectedSubtitleStreamIndex >= 0) {
+        prewarmIndices.add(Math.floor(selectedSubtitleStreamIndex));
+      }
+      const subtitleTracks = Array.isArray(resolved?.tracks?.subtitleTracks) ? resolved.tracks.subtitleTracks : [];
+      const englishTextCandidates = subtitleTracks.filter((track) => (
+        track
+        && track.isTextBased
+        && !track.isExternal
+        && normalizeIsoLanguage(track.language || "") === "en"
+      ));
+      const preferredEnglishTrack = englishTextCandidates.find((track) => !isLikelyForcedSubtitleTrack(track))
+        || englishTextCandidates[0]
+        || null;
+      const preferredEnglishStreamIndex = Number(preferredEnglishTrack?.streamIndex ?? -1);
+      if (Number.isFinite(preferredEnglishStreamIndex) && preferredEnglishStreamIndex >= 0) {
+        prewarmIndices.add(Math.floor(preferredEnglishStreamIndex));
+      }
+      prewarmIndices.forEach((streamIndex) => {
+        prewarmSubtitleVttBuild(resolvedSourceInput, streamIndex);
+      });
+    }
+
+    return json(resolved);
+  }
+
   if (url.pathname === "/api/resolve/movie") {
     const tmdbId = (url.searchParams.get("tmdbId") || "").trim();
     const titleFallback = (url.searchParams.get("title") || "").trim();
@@ -5696,6 +6537,9 @@ async function handleApi(url, request) {
     const preferredAudioLang = normalizePreferredAudioLang(url.searchParams.get("audioLang"));
     const preferredQuality = normalizePreferredStreamQuality(url.searchParams.get("quality"));
     const preferredSubtitleLang = normalizeSubtitlePreference(url.searchParams.get("subtitleLang"));
+    const sourceHash = normalizeSourceHash(url.searchParams.get("sourceHash"));
+    const minSeeders = normalizeMinimumSeeders(url.searchParams.get("minSeeders"));
+    const allowedFormats = normalizeAllowedFormats(url.searchParams.get("allowedFormats"));
 
     if (!/^\d+$/.test(tmdbId)) {
       return json({ error: "Missing or invalid tmdbId query parameter." }, 400);
@@ -5707,6 +6551,9 @@ async function handleApi(url, request) {
       preferredAudioLang,
       preferredQuality,
       preferredSubtitleLang,
+      sourceHash,
+      minSeeders,
+      allowedFormats,
     });
     const resolvedSourceInput = String(resolved?.sourceInput || extractPlayableSourceInput(resolved?.playableUrl || "")).trim();
     const selectedSubtitleStreamIndex = Number(resolved?.selectedSubtitleStreamIndex || -1);
@@ -5932,7 +6779,7 @@ if (typeof cacheSweepTimer?.unref === "function") {
 const server = Bun.serve({
   hostname: HOST,
   port: PORT,
-  idleTimeout: 120,
+  idleTimeout: SERVER_IDLE_TIMEOUT_SECONDS,
   async fetch(request) {
     const url = new URL(request.url);
 

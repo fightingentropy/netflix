@@ -55,6 +55,32 @@
           <small>Lower bitrate for smoother playback</small>
         </label>
 
+        <section class="source-filter-section" aria-labelledby="sourceFilterTitle">
+          <h2 id="sourceFilterTitle" class="settings-section-title">Source Filters</h2>
+          <p class="source-filter-help">Filter source picks by seeds and container format.</p>
+
+          <div class="source-filter-grid">
+            <label class="source-min-seeds" for="sourceMinSeeders">
+              <span class="source-filter-label">Minimum seeds</span>
+              <input id="sourceMinSeeders" name="sourceMinSeeders" type="number" min="0" max="50000" step="1" value="0" />
+            </label>
+
+            <fieldset class="source-format-fieldset">
+              <legend class="source-filter-label">Allowed formats</legend>
+              <div class="source-format-options">
+                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="mp4" /> <span>MP4</span></label>
+                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="mkv" /> <span>MKV</span></label>
+                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="m3u8" /> <span>M3U8</span></label>
+                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="ts" /> <span>TS</span></label>
+                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="avi" /> <span>AVI</span></label>
+                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="wmv" /> <span>WMV</span></label>
+              </div>
+            </fieldset>
+          </div>
+
+          <p class="source-filter-note">If all formats are selected, format filtering is disabled.</p>
+        </section>
+
         <section class="subtitle-color-section" aria-labelledby="subtitleColorTitle">
           <h2 id="subtitleColorTitle" class="settings-section-title">Subtitle Color</h2>
           <p class="subtitle-color-help">Default is a muted gray so captions are easier on your eyes.</p>
@@ -112,6 +138,17 @@
             <label class="avatar-upload-btn" for="avatarImageInput">Choose from computer</label>
             <input id="avatarImageInput" type="file" accept="image/*" />
             <span id="avatarUploadHint" class="avatar-upload-hint">Auto center-crop + resize to square.</span>
+          </div>
+        </section>
+
+        <section class="maintenance-section" aria-labelledby="maintenanceTitle">
+          <h2 id="maintenanceTitle" class="settings-section-title">Maintenance</h2>
+          <p class="maintenance-help">
+            Clears all server-side caches for stream resolution, metadata, subtitles, and playback sessions.
+          </p>
+          <div class="maintenance-actions">
+            <button id="clearAllCachesBtn" class="clear-cache-btn" type="button">Clear All Caches</button>
+            <p id="cacheClearStatus" class="cache-clear-status" role="status" aria-live="polite"></p>
           </div>
         </section>
 

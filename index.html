@@ -124,61 +124,8 @@
 
     <section id="continueRow" class="continue-row">
       <h2>Continue watching for Erlin</h2>
-      <div class="cards">
-        <article
-          class="card"
-          tabindex="0"
-          data-title="Tate"
-          data-episode="Part 1"
-          data-src="assets/videos/tate-full.mp4"
-          data-thumb="assets/images/tate-thumb.jpg"
-          data-year="2023"
-          data-runtime="2h 40m"
-          data-maturity="18"
-          data-quality="HD"
-          data-audio="Spatial Audio"
-          data-description="A raw, longform interview series that follows internet fame, sudden scrutiny, and the pressure of performing under a constant digital spotlight."
-          data-cast="Andrew Tate, Tristan Tate, Emory Andrew"
-          data-genres="Documentary, True Crime, Biographical"
-          data-vibe="Provocative, Gritty, Unfiltered"
-        >
-          <div class="card-base">
-            <img src="assets/images/tate-thumb.jpg" alt="Tate" />
-            <div class="progress"><span style="width: 76%"></span></div>
-          </div>
-          <div class="card-hover">
-            <img class="card-hover-image" src="assets/images/tate-thumb.jpg" alt="Tate preview" />
-            <div class="card-hover-body">
-              <div class="card-hover-controls">
-                <div class="card-hover-actions">
-                  <button class="hover-round hover-play" type="button" aria-label="Play Tate">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5v17L20 12 5 3.5Z" /></svg>
-                  </button>
-                  <button class="hover-round" type="button" aria-label="Added to my list">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5L19.5 7.5" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                  </button>
-                  <button class="hover-round" type="button" aria-label="Remove from continue watching">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke-linecap="round" /></svg>
-                  </button>
-                  <button class="hover-round" type="button" aria-label="Rate thumbs up">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20H5.8A1.8 1.8 0 0 1 4 18.2V10a1.8 1.8 0 0 1 1.8-1.8H8V20Zm2 0h6a3.5 3.5 0 0 0 3.4-2.8l.8-4A2.5 2.5 0 0 0 17.75 10H14V6.6A2.6 2.6 0 0 0 11.4 4L10 9.3V20Z" /></svg>
-                  </button>
-                </div>
-                <button class="hover-round hover-details" type="button" aria-label="More details">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                </button>
-              </div>
-              <div class="card-hover-meta">
-                <span class="meta-age">18</span>
-                <span>2h 40m</span>
-                <span class="meta-chip">HD</span>
-                <span class="meta-spatial">Podcast</span>
-              </div>
-              <p class="card-hover-tags">Interview <span>&bull;</span> Longform <span>&bull;</span> Talk</p>
-            </div>
-          </div>
-        </article>
-      </div>
+      <div id="continueCards" class="cards"></div>
+      <p id="continueEmpty" class="continue-empty" hidden>Start a movie and it will appear here.</p>
     </section>
   </div>
 
@@ -199,7 +146,7 @@
       </button>
 
       <header class="details-hero">
-        <img id="detailsImage" class="details-hero-image" src="assets/images/tate-thumb.jpg" alt="Title artwork" />
+        <img id="detailsImage" class="details-hero-image" src="assets/videos/local/tate-part-1/thumbnail.jpg" alt="Title artwork" />
         <div class="details-hero-fade" aria-hidden="true"></div>
         <div class="details-hero-content">
           <h3 id="detailsTitle">TATE</h3>
@@ -251,7 +198,7 @@
             <p>Internet War Stories</p>
           </article>
           <article class="details-item">
-            <img src="assets/images/tate-thumb.jpg" alt="Suggested title" />
+            <img src="assets/videos/local/tate-part-1/thumbnail.jpg" alt="Suggested title" />
             <p>Fame & Fallout</p>
           </article>
         </div>
