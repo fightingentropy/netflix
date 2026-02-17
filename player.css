@@ -611,7 +611,7 @@ body {
   font-size: clamp(1.3rem, 2.1vw, 1.85rem);
 }
 
-.audio-popover-grid.subtitles-only .audio-options {
+.audio-popover-grid.subtitles-only .audio-options:not(.source-options) {
   max-height: min(34vh, 250px);
   padding-right: 0;
   margin-right: 0;
@@ -637,12 +637,15 @@ body {
 
 .source-option {
   display: grid;
-  gap: 4px;
-  min-height: 74px;
-  padding: 8px 10px 8px 34px;
+  grid-template-rows: auto auto auto;
+  gap: 5px;
+  min-height: 88px;
+  padding: 10px 12px 10px 36px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.02);
+  align-content: center;
+  overflow: hidden;
 }
 
 .source-option::before {
@@ -651,17 +654,22 @@ body {
 }
 
 .source-option-name {
-  font-size: clamp(0.92rem, 1.3vw, 1.12rem);
-  line-height: 1.25;
+  font-size: clamp(0.92rem, 1.12vw, 1.05rem);
+  line-height: 1.28;
   color: #fff;
-  white-space: nowrap;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   text-overflow: ellipsis;
+  word-break: break-word;
 }
 
 .source-option-hint {
-  font-size: clamp(0.78rem, 1.02vw, 0.92rem);
-  line-height: 1.2;
+  font-size: clamp(0.76rem, 0.95vw, 0.88rem);
+  line-height: 1.24;
   color: rgba(245, 245, 245, 0.82);
   white-space: nowrap;
   overflow: hidden;
@@ -669,7 +677,7 @@ body {
 }
 
 .source-option-meta {
-  font-size: clamp(0.72rem, 0.94vw, 0.86rem);
+  font-size: clamp(0.7rem, 0.9vw, 0.82rem);
   line-height: 1.2;
   color: rgba(245, 245, 245, 0.7);
   white-space: nowrap;
@@ -684,13 +692,13 @@ body {
   padding: 6px 2px;
 }
 
-.audio-popover-grid.subtitles-only .audio-option {
+.audio-popover-grid.subtitles-only .audio-option:not(.source-option) {
   min-height: 42px;
   padding: 6px 8px 6px 36px;
   font-size: clamp(1.05rem, 1.25vw, 1.35rem);
 }
 
-.audio-popover-grid.subtitles-only .audio-option::before {
+.audio-popover-grid.subtitles-only .audio-option:not(.source-option)::before {
   left: 9px;
   font-size: 1.25rem;
 }
@@ -1009,7 +1017,7 @@ body {
     font-size: clamp(1.1rem, 4.5vw, 1.45rem);
   }
 
-  .audio-popover-grid.subtitles-only .audio-options {
+  .audio-popover-grid.subtitles-only .audio-options:not(.source-options) {
     max-height: min(24vh, 150px);
     padding-right: 0;
     margin-right: 0;
@@ -1021,40 +1029,40 @@ body {
   }
 
   .source-options {
-    max-height: min(24vh, 180px);
+    max-height: min(30vh, 220px);
     gap: 6px;
   }
 
   .source-option {
-    min-height: 60px;
-    padding: 6px 8px 6px 28px;
+    min-height: 72px;
+    padding: 8px 10px 8px 30px;
     border-radius: 7px;
   }
 
   .source-option::before {
-    left: 7px;
+    left: 8px;
     font-size: 0.98rem;
   }
 
   .source-option-name {
-    font-size: clamp(0.82rem, 3.4vw, 0.95rem);
+    font-size: clamp(0.8rem, 3.2vw, 0.92rem);
   }
 
   .source-option-hint {
-    font-size: clamp(0.72rem, 2.95vw, 0.84rem);
+    font-size: clamp(0.7rem, 2.8vw, 0.82rem);
   }
 
   .source-option-meta {
-    font-size: clamp(0.66rem, 2.7vw, 0.76rem);
+    font-size: clamp(0.64rem, 2.5vw, 0.74rem);
   }
 
-  .audio-popover-grid.subtitles-only .audio-option {
+  .audio-popover-grid.subtitles-only .audio-option:not(.source-option) {
     min-height: 36px;
     padding: 5px 7px 5px 30px;
     font-size: clamp(0.9rem, 3.8vw, 1.05rem);
   }
 
-  .audio-popover-grid.subtitles-only .audio-option::before {
+  .audio-popover-grid.subtitles-only .audio-option:not(.source-option)::before {
     left: 7px;
     font-size: 1rem;
   }
