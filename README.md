@@ -14,6 +14,13 @@ This repository is a Bun server with static frontend pages (no frontend framewor
 
 The app is designed around TMDB movie playback via Real-Debrid links, with server-side compatibility handling (remux/HLS).
 
+## 1.1 Current Folder Layout
+
+- `assets/icons/`: app icons and player control SVGs
+- `assets/images/`: static artwork and thumbnail images
+- `assets/videos/`: local video files used by hero/continue-watching
+- root `*.html`, `*.js`, `*.css`: active app pages and logic
+
 ## 2. Runtime Model
 
 ## 2.1 Single Bun Server
@@ -90,7 +97,7 @@ Operational notes:
 
 Main behavior:
 
-- hero trailer (`intro.mp4`) with mute/play controls
+- hero trailer (`assets/videos/intro.mp4`) with mute/play controls
 - account menu with link to `settings.html`
 - account avatar button and chevron button both toggle the same account menu
 - “Continue watching” card(s)
@@ -148,7 +155,7 @@ Playback source modes:
 
 1. explicit `src`
 2. TMDB movie resolve via `/api/resolve/movie`
-3. fallback static source (`intro.mp4`) when no source/tmdb
+3. fallback static source (`assets/videos/intro.mp4`) when no source/tmdb
 
 UI/interaction highlights:
 

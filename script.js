@@ -200,7 +200,7 @@ function buildCardFromTmdb(item, genreMap, imageBase = TMDB_IMAGE_BASE) {
   const year = releaseDate ? releaseDate.slice(0, 4) : "2024";
   const posterPath = item.poster_path || item.backdrop_path;
   const backdropPath = item.backdrop_path || item.poster_path;
-  const posterUrl = posterPath ? `${imageBase}/w500${posterPath}` : "thumbnail.jpg";
+  const posterUrl = posterPath ? `${imageBase}/w500${posterPath}` : "assets/images/thumbnail.jpg";
   const heroUrl = backdropPath ? `${imageBase}/original${backdropPath}` : posterUrl;
   const maturity = item.adult ? "18" : "13+";
   const genreNames = (item.genre_ids || [])
@@ -417,7 +417,7 @@ function openPlayerPage({ title, episode, src, tmdbId, mediaType, year }) {
   }
 
   if (!src && !tmdbId) {
-    params.set("src", "intro.mp4");
+    params.set("src", "assets/videos/intro.mp4");
   }
 
   window.location.href = `player.html?${params.toString()}`;
@@ -439,7 +439,7 @@ function getCardModalData(card) {
 
   return {
     ...getCardDetails(card),
-    thumb: card.dataset.thumb || previewImage?.getAttribute("src") || "thumbnail.jpg",
+    thumb: card.dataset.thumb || previewImage?.getAttribute("src") || "assets/images/thumbnail.jpg",
     year: card.dataset.year || "2024",
     runtime: card.dataset.runtime || "1h 40m",
     maturity: card.dataset.maturity || "16+",
@@ -566,7 +566,7 @@ if (heroTitle) {
   const heroDestination = {
     title: "Jeffrey Epstein: Filthy Rich",
     episode: "Official Trailer",
-    src: "intro.mp4",
+    src: "assets/videos/intro.mp4",
   };
 
   heroTitle.style.cursor = "pointer";

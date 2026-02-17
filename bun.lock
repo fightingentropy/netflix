@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "netflix-one-folder",
+      "name": "netflix-app",
       "devDependencies": {
         "vite": "latest",
       },

@@ -67,6 +67,7 @@ let audioOptions = [];
 let subtitleOptions = [];
 
 const params = new URLSearchParams(window.location.search);
+const DEFAULT_TRAILER_SOURCE = "assets/videos/intro.mp4";
 const title = params.get("title") || "Jeffrey Epstein: Filthy Rich";
 const episode = params.get("episode") || "Official Trailer";
 const src = (params.get("src") || "").trim();
@@ -352,7 +353,7 @@ if (isTmdbMoviePlayback && !hasSubtitleLangParam) {
 if (isTmdbMoviePlayback && hasSubtitleLangParam) {
   persistSubtitleLangPreference(preferredSubtitleLang);
 }
-const sourceIdentity = src || (isTmdbMoviePlayback ? `tmdb:${tmdbId}` : "intro.mp4");
+const sourceIdentity = src || (isTmdbMoviePlayback ? `tmdb:${tmdbId}` : DEFAULT_TRAILER_SOURCE);
 const resumeStorageKey = `netflix-resume:${sourceIdentity}`;
 let resumeTime = 0;
 let lastPersistedResumeTime = 0;
@@ -2368,7 +2369,7 @@ async function initPlaybackSource() {
 
   if (!isTmdbMoviePlayback) {
     tmdbExpectedDurationSeconds = 0;
-    setVideoSource(src || "intro.mp4");
+    setVideoSource(src || DEFAULT_TRAILER_SOURCE);
     hideResolver();
     await tryPlay();
     return;
