@@ -86,10 +86,13 @@ Current environment variables:
   - `auto` maps to `videotoolbox` on macOS, else `none`
 - `AUTO_AUDIO_SYNC` (`0/1` style, default: `1`)
 - `PLAYBACK_SESSIONS` (`0/1` style)
+- `NATIVE_PLAYBACK` (`auto|off`, default: `auto`)
+- `MPV_BINARY` (default: `mpv`)
 
 Operational notes:
 
 - Auto A/V correction in `/api/remux` is controlled by `AUTO_AUDIO_SYNC` and defaults to enabled when unset.
+- Native playback handoff to `mpv` is attempted for remux sources when `NATIVE_PLAYBACK=auto` and `mpv` is available; browser playback remains fallback.
 - Playback session persistence can be enabled server-side via `PLAYBACK_SESSIONS`, but the current player client currently does not send session progress updates (see section 13).
 
 ## 5. Frontend Behavior
@@ -225,9 +228,13 @@ All API routes are implemented in `server.js`.
 ## 6.4 Ops/Debug APIs
 
 - `GET /api/config`
-  - returns high-level config flags and effective HLS hwaccel mode
+  - returns high-level config flags, native playback capability, and effective HLS hwaccel mode
 - `GET /api/health[?refresh=1]`
   - ffmpeg/ffprobe capability snapshot + uptime
+- `GET /api/native/player[?refresh=1]`
+  - returns native playback status (`mpv` availability and mode)
+- `POST /api/native/play`
+  - launches `mpv` for a provided source URL when available
 - `GET /api/debug/cache`
   - cache statistics and sizing
 - `GET /api/debug/cache?clear=1`
@@ -403,11 +410,14 @@ Prewarm behavior:
 
 ## 12. A/V Sync Logic
 
-Manual sync UI:
+Manual sync path:
 
-- removed from player UI
-- player keeps manual offset effectively at `0`
-- `audioSyncMs` is stripped from player URL
+- no visible sync slider in player UI
+- remux sources support keyboard sync adjustment:
+  - `[` delays audio by `+50ms`
+  - `]` advances audio by `-50ms`
+- per-source sync offsets are persisted in browser storage using source infohash when available
+- `audioSyncMs` is stripped from page URL, but still sent on remux requests
 
 Server auto-sync (`/api/remux` only):
 
@@ -428,6 +438,12 @@ FFmpeg filter application:
 
 - positive shift: `adelay=<ms>:all=1`
 - negative shift: `atrim=start=<sec>,asetpts=PTS-STARTPTS`
+- all paths append `aresample=async=1000:first_pts=0` to reduce drift from irregular timestamps
+
+Additional remux timestamp normalization:
+
+- ffmpeg uses `+genpts +igndts +discardcorrupt`
+- mux output uses `-avoid_negative_ts make_zero` and zero interleave/mux delay settings
 
 ## 13. Caching and Persistence (SQLite + Memory)
 
@@ -543,6 +559,7 @@ If A/V sync feels off:
 1. verify playback is using `/api/remux` path (auto-sync applied there)
 2. check remux response headers (`X-Audio-*`) and confirm `X-Auto-Audio-Sync-Enabled: 1`
 3. refresh source and clear stale cache entries when needed
+4. use `[` / `]` for per-source manual correction when a specific release still has residual drift
 
 If HLS is unstable on machine:
 

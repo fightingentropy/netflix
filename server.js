@@ -74,6 +74,10 @@ const EXTERNAL_SUBTITLE_STREAM_INDEX_BASE = 2_000_000;
 const HLS_HWACCEL_MODE = normalizeHlsHwaccelMode(process.env.HLS_HWACCEL || "none");
 const AUTO_AUDIO_SYNC_ENABLED = normalizeAutoAudioSyncEnabled(process.env.AUTO_AUDIO_SYNC || "1");
 const PLAYBACK_SESSIONS_ENABLED = normalizeAutoAudioSyncEnabled(process.env.PLAYBACK_SESSIONS || "0");
+const NATIVE_PLAYBACK_MODE = normalizeNativePlaybackMode(
+  process.env.NATIVE_PLAYBACK || process.env.NATIVE_PLAYER_MODE || "auto",
+);
+const MPV_BINARY = String(process.env.MPV_BINARY || "mpv").trim() || "mpv";
 const inFlightMovieResolves = new Map();
 const inFlightMediaProbeRequests = new Map();
 const inFlightSubtitleVttBuilds = new Map();
@@ -85,9 +89,11 @@ const CACHE_SWEEP_INTERVAL_MS = 60 * 1000;
 const SERVER_IDLE_TIMEOUT_SECONDS = 240;
 const SERVER_STARTED_AT = Date.now();
 const FFMPEG_CAPABILITY_REFRESH_MS = 5 * 60 * 1000;
+const NATIVE_PLAYER_STATUS_REFRESH_MS = 5 * 60 * 1000;
 let persistentCacheDb = null;
 let loggedHlsHwaccelFallback = false;
 let ffmpegCapabilityTask = null;
+let nativePlayerStatusTask = null;
 let ffmpegCapabilitySnapshot = {
   checkedAt: 0,
   ffmpegAvailable: false,
@@ -102,6 +108,14 @@ let ffmpegCapabilitySnapshot = {
     h264_nvenc: false,
     h264_qsv: false,
   },
+  notes: [],
+};
+let nativePlayerStatusSnapshot = {
+  checkedAt: 0,
+  mode: NATIVE_PLAYBACK_MODE,
+  mpvBinary: MPV_BINARY,
+  available: false,
+  version: "",
   notes: [],
 };
 const cacheStats = {
@@ -262,6 +276,9 @@ function initializePersistentCacheDb() {
 initializePersistentCacheDb();
 void getFfmpegCapabilities().catch(() => {
   // Health endpoint can still probe lazily on demand.
+});
+void getNativePlayerStatus().catch(() => {
+  // Native player endpoint can still probe lazily on demand.
 });
 
 function json(data, status = 200) {
@@ -971,6 +988,17 @@ function normalizeAutoAudioSyncEnabled(value) {
   );
 }
 
+function normalizeNativePlaybackMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto" || normalized === "on" || normalized === "enabled" || normalized === "1") {
+    return "auto";
+  }
+  if (normalized === "off" || normalized === "disabled" || normalized === "0" || normalized === "false") {
+    return "off";
+  }
+  return "auto";
+}
+
 function normalizeHlsHwaccelMode(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized || normalized === "none" || normalized === "off" || normalized === "false" || normalized === "0") {
@@ -1315,6 +1343,151 @@ async function getFfmpegCapabilities(forceRefresh = false) {
     });
 
   return ffmpegCapabilityTask;
+}
+
+function parseMpvVersionLine(rawOutput) {
+  const text = String(rawOutput || "");
+  const line = text
+    .split(/\r?\n/)
+    .find((item) => item.toLowerCase().startsWith("mpv "));
+  return String(line || "").trim();
+}
+
+async function probeNativePlayerStatus() {
+  const snapshot = {
+    checkedAt: Date.now(),
+    mode: NATIVE_PLAYBACK_MODE,
+    mpvBinary: MPV_BINARY,
+    available: false,
+    version: "",
+    notes: [],
+  };
+
+  if (NATIVE_PLAYBACK_MODE === "off") {
+    snapshot.notes.push("Native playback is disabled by configuration.");
+    return snapshot;
+  }
+
+  try {
+    const output = await runProcessAndCapture(
+      [MPV_BINARY, "--version"],
+      { timeoutMs: 5000, binary: false },
+    );
+    const versionLine = parseMpvVersionLine(output);
+    if (!versionLine) {
+      snapshot.notes.push("mpv was found but version output was unexpected.");
+      return snapshot;
+    }
+    snapshot.available = true;
+    snapshot.version = versionLine;
+    return snapshot;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "unknown error");
+    snapshot.notes.push(`mpv unavailable: ${message}`);
+    return snapshot;
+  }
+}
+
+async function getNativePlayerStatus(forceRefresh = false) {
+  const isFresh = nativePlayerStatusSnapshot.checkedAt > 0
+    && (Date.now() - nativePlayerStatusSnapshot.checkedAt) < NATIVE_PLAYER_STATUS_REFRESH_MS;
+  if (!forceRefresh && isFresh) {
+    return nativePlayerStatusSnapshot;
+  }
+
+  if (nativePlayerStatusTask) {
+    return nativePlayerStatusTask;
+  }
+
+  nativePlayerStatusTask = probeNativePlayerStatus()
+    .then((snapshot) => {
+      nativePlayerStatusSnapshot = snapshot;
+      return snapshot;
+    })
+    .finally(() => {
+      nativePlayerStatusTask = null;
+    });
+
+  return nativePlayerStatusTask;
+}
+
+function shellQuote(value) {
+  return `'${String(value || "").replace(/'/g, `'\\''`)}'`;
+}
+
+function toAbsolutePlaybackUrl(value, requestUrl) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  try {
+    return new URL(raw, requestUrl).toString();
+  } catch {
+    return "";
+  }
+}
+
+function isLoopbackHostname(value) {
+  const hostname = String(value || "").trim().toLowerCase();
+  return (
+    hostname === "127.0.0.1"
+    || hostname === "::1"
+    || hostname === "[::1]"
+    || hostname === "localhost"
+  );
+}
+
+async function launchMpvPlayback({
+  sourceUrl,
+  subtitleUrl = "",
+  title = "",
+  startSeconds = 0,
+  audioSyncMs = 0,
+} = {}) {
+  const normalizedSource = String(sourceUrl || "").trim();
+  if (!normalizedSource) {
+    throw new Error("Missing source URL.");
+  }
+
+  const safeStartSeconds = Number.isFinite(startSeconds) && startSeconds > 0
+    ? Math.floor(startSeconds)
+    : 0;
+  const safeAudioSyncMs = normalizeAudioSyncMs(audioSyncMs);
+  const safeSubtitleUrl = String(subtitleUrl || "").trim();
+  const safeTitle = String(title || "").trim();
+  const args = [
+    MPV_BINARY,
+    "--force-window=yes",
+    "--idle=no",
+    "--keep-open=no",
+  ];
+  if (safeTitle) {
+    args.push(`--title=${safeTitle}`);
+  }
+  if (safeStartSeconds > 0) {
+    args.push(`--start=${safeStartSeconds}`);
+  }
+  if (safeAudioSyncMs !== 0) {
+    args.push(`--audio-delay=${(safeAudioSyncMs / 1000).toFixed(3)}`);
+  }
+  if (safeSubtitleUrl) {
+    args.push(`--sub-file=${safeSubtitleUrl}`);
+  }
+  args.push(normalizedSource);
+
+  const command = `nohup ${args.map(shellQuote).join(" ")} >/dev/null 2>&1 &`;
+  const shell = Bun.spawn(
+    ["/bin/sh", "-lc", command],
+    {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    },
+  );
+  const exitCode = await shell.exited;
+  if (exitCode !== 0) {
+    throw new Error("Failed to launch mpv.");
+  }
 }
 
 function parseRuntimeFromLabelSeconds(value) {
@@ -2507,6 +2680,12 @@ async function createFfmpegProxyResponse(
     "ffmpeg",
     "-v",
     "error",
+    "-fflags",
+    "+genpts+igndts+discardcorrupt",
+    "-analyzeduration",
+    "100M",
+    "-probesize",
+    "100M",
   ];
 
   if (safeStartSeconds > 0) {
@@ -2526,12 +2705,16 @@ async function createFfmpegProxyResponse(
   } else {
     proxyArgs.push("-sn");
   }
+  const audioFilters = [];
   if (totalAudioSyncMs > 0) {
-    proxyArgs.push("-af", `adelay=${totalAudioSyncMs}:all=1`);
+    audioFilters.push(`adelay=${totalAudioSyncMs}:all=1`);
   } else if (totalAudioSyncMs < 0) {
     const advanceSeconds = (Math.abs(totalAudioSyncMs) / 1000).toFixed(3).replace(/\.?0+$/, "");
-    proxyArgs.push("-af", `atrim=start=${advanceSeconds},asetpts=PTS-STARTPTS`);
+    audioFilters.push(`atrim=start=${advanceSeconds}`);
+    audioFilters.push("asetpts=PTS-STARTPTS");
   }
+  audioFilters.push("aresample=async=1000:first_pts=0");
+  proxyArgs.push("-af", audioFilters.join(","));
   proxyArgs.push(
     "-c:v",
     "copy",
@@ -2549,6 +2732,14 @@ async function createFfmpegProxyResponse(
     );
   }
   proxyArgs.push(
+    "-max_interleave_delta",
+    "0",
+    "-muxpreload",
+    "0",
+    "-muxdelay",
+    "0",
+    "-avoid_negative_ts",
+    "make_zero",
     "-movflags",
     "frag_keyframe+empty_moov+faststart",
     "-f",
@@ -6327,7 +6518,10 @@ async function handleApi(url, request) {
   }
 
   if (url.pathname === "/api/config") {
-    const ffmpeg = await getFfmpegCapabilities();
+    const [ffmpeg, nativePlayer] = await Promise.all([
+      getFfmpegCapabilities(),
+      getNativePlayerStatus(),
+    ]);
     return json({
       realDebridConfigured: Boolean(REAL_DEBRID_TOKEN),
       tmdbConfigured: Boolean(TMDB_API_KEY),
@@ -6336,6 +6530,13 @@ async function handleApi(url, request) {
       hlsHwaccel: {
         requested: HLS_HWACCEL_MODE,
         effective: ffmpeg.effectiveHlsHwaccel,
+      },
+      nativePlayback: {
+        mode: NATIVE_PLAYBACK_MODE,
+        available: nativePlayer.available,
+        mpvBinary: nativePlayer.mpvBinary,
+        version: nativePlayer.version,
+        notes: nativePlayer.notes,
       },
     });
   }
@@ -6347,6 +6548,92 @@ async function handleApi(url, request) {
       uptimeSeconds: Math.floor((Date.now() - SERVER_STARTED_AT) / 1000),
       ffmpeg,
     });
+  }
+
+  if (url.pathname === "/api/native/player") {
+    const nativePlayer = await getNativePlayerStatus(url.searchParams.get("refresh") === "1");
+    return json({
+      mode: NATIVE_PLAYBACK_MODE,
+      player: "mpv",
+      available: nativePlayer.available,
+      mpvBinary: nativePlayer.mpvBinary,
+      version: nativePlayer.version,
+      notes: nativePlayer.notes,
+    });
+  }
+
+  if (url.pathname === "/api/native/play") {
+    if (request.method !== "POST") {
+      return json({ error: "Method not allowed. Use POST." }, 405);
+    }
+    if (!isLoopbackHostname(url.hostname)) {
+      return json({ error: "Native playback requests are restricted to local loopback access." }, 403);
+    }
+
+    const nativePlayer = await getNativePlayerStatus();
+    if (NATIVE_PLAYBACK_MODE === "off") {
+      return json({
+        ok: true,
+        launched: false,
+        reason: "disabled",
+        player: "mpv",
+      });
+    }
+    if (!nativePlayer.available) {
+      return json({
+        ok: true,
+        launched: false,
+        reason: "unavailable",
+        player: "mpv",
+      });
+    }
+
+    let payload = null;
+    try {
+      payload = await request.json();
+    } catch {
+      return json({ error: "Invalid JSON body." }, 400);
+    }
+
+    const sourceUrl = toAbsolutePlaybackUrl(
+      payload?.sourceUrl || payload?.source || payload?.url || "",
+      url,
+    );
+    if (!sourceUrl) {
+      return json({ error: "Missing or invalid sourceUrl." }, 400);
+    }
+    const subtitleUrl = toAbsolutePlaybackUrl(payload?.subtitleUrl || "", url);
+    const titleParts = [
+      String(payload?.title || "").trim(),
+      String(payload?.episode || "").trim(),
+    ].filter(Boolean);
+    const displayTitle = titleParts.join(" - ");
+    const startSeconds = Number(payload?.startSeconds || 0);
+    const audioSyncMs = normalizeAudioSyncMs(payload?.audioSyncMs || 0);
+
+    try {
+      await launchMpvPlayback({
+        sourceUrl,
+        subtitleUrl,
+        title: displayTitle,
+        startSeconds,
+        audioSyncMs,
+      });
+      return json({
+        ok: true,
+        launched: true,
+        player: "mpv",
+        sourceUrl,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to launch native player.";
+      return json({
+        ok: false,
+        launched: false,
+        player: "mpv",
+        error: message,
+      }, 500);
+    }
   }
 
   if (url.pathname === "/api/tmdb/popular-movies") {

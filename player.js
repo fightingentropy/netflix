@@ -75,6 +75,7 @@ let preferredSubtitleLang = "";
 let audioOptions = [];
 let subtitleOptions = [];
 let sourceOptions = [];
+let nativePlaybackLaunched = false;
 
 const params = new URLSearchParams(window.location.search);
 const DEFAULT_TRAILER_SOURCE = "assets/videos/intro.mp4";
@@ -181,6 +182,8 @@ const SUBTITLE_STREAM_PREF_KEY_PREFIX = "netflix-subtitle-stream:movie:";
 const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
 const SOURCE_MIN_SEEDERS_PREF_KEY = "netflix-source-filter-min-seeders";
 const SOURCE_ALLOWED_FORMATS_PREF_KEY = "netflix-source-filter-allowed-formats";
+const SOURCE_AUDIO_SYNC_PREF_KEY_PREFIX = "netflix-source-audio-sync:";
+const NATIVE_PLAYBACK_MODE_PREF_KEY = "netflix-native-playback-mode";
 const SUBTITLE_COLOR_PREF_KEY = "netflix-subtitle-color-pref";
 const DEFAULT_SUBTITLE_COLOR = "#b8bcc3";
 const supportedQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
@@ -188,6 +191,7 @@ const supportedSourceFormats = ["mp4", "mkv", "m3u8", "ts", "avi", "wmv"];
 const supportedSourceFormatSet = new Set(supportedSourceFormats);
 const AUDIO_SYNC_MIN_MS = -1500;
 const AUDIO_SYNC_MAX_MS = 1500;
+const AUDIO_SYNC_STEP_MS = 50;
 const RESUME_SAVE_MIN_INTERVAL_MS = 3000;
 const RESUME_SAVE_MIN_DELTA_SECONDS = 1.5;
 const RESUME_CLEAR_AT_END_THRESHOLD_SECONDS = 8;
@@ -332,6 +336,25 @@ function normalizeAudioSyncMs(value) {
   }
   const clamped = Math.max(AUDIO_SYNC_MIN_MS, Math.min(AUDIO_SYNC_MAX_MS, Math.round(parsed)));
   return clamped;
+}
+
+function normalizeNativePlaybackMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto" || normalized === "on" || normalized === "1" || normalized === "enabled") {
+    return "auto";
+  }
+  if (normalized === "off" || normalized === "0" || normalized === "disabled" || normalized === "browser") {
+    return "off";
+  }
+  return "auto";
+}
+
+function getStoredNativePlaybackMode() {
+  try {
+    return normalizeNativePlaybackMode(localStorage.getItem(NATIVE_PLAYBACK_MODE_PREF_KEY));
+  } catch {
+    return "auto";
+  }
 }
 
 function isRecognizedAudioLang(value) {
@@ -497,6 +520,7 @@ if (isTmdbMoviePlayback && !hasQualityParam) {
 let preferredSourceMinSeeders = getStoredSourceMinSeeders();
 let preferredSourceFormats = getStoredSourceFormats();
 let preferredAudioSyncMs = 0;
+const preferredNativePlaybackMode = getStoredNativePlaybackMode();
 preferredSubtitleLang = normalizeSubtitlePreference(subtitleLangParam);
 if (isTmdbMoviePlayback && !hasSubtitleLangParam) {
   preferredSubtitleLang = getStoredSubtitleLangForTmdbMovie(tmdbId) || preferredSubtitleLang;
@@ -504,6 +528,7 @@ if (isTmdbMoviePlayback && !hasSubtitleLangParam) {
 if (isTmdbMoviePlayback && hasSubtitleLangParam) {
   persistSubtitleLangPreference(preferredSubtitleLang);
 }
+applyPreferredSourceAudioSync(selectedSourceHash);
 const sourceIdentity = isSeriesPlayback
   ? `series:${activeSeries.id}:episode:${seriesEpisodeIndex}`
   : (src || (
@@ -666,8 +691,8 @@ function hideSeekLoadingIndicator() {
   seekLoadingOverlay.hidden = true;
 }
 
-function showResolver(message, { isError = false } = {}) {
-  if (hasExplicitSource) {
+function showResolver(message, { isError = false, showStatus = isError } = {}) {
+  if (hasExplicitSource && !showStatus && !isError) {
     hideResolver();
     return;
   }
@@ -678,10 +703,10 @@ function showResolver(message, { isError = false } = {}) {
 
   if (resolverStatus) {
     resolverStatus.textContent = String(message || "").trim() || "Unable to load this video.";
-    resolverStatus.hidden = !isError;
+    resolverStatus.hidden = !showStatus;
   }
   if (resolverLoader) {
-    resolverLoader.hidden = isError;
+    resolverLoader.hidden = showStatus || isError;
   }
   hideSeekLoadingIndicator();
   resolverOverlay.hidden = false;
@@ -733,6 +758,44 @@ function getLanguageDisplayLabel(langCode) {
 function normalizeSourceHash(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return /^[a-f0-9]{40}$/.test(normalized) ? normalized : "";
+}
+
+function getSourceAudioSyncStorageKey(sourceHash) {
+  return `${SOURCE_AUDIO_SYNC_PREF_KEY_PREFIX}${normalizeSourceHash(sourceHash)}`;
+}
+
+function getStoredSourceAudioSyncMs(sourceHash) {
+  const normalizedHash = normalizeSourceHash(sourceHash);
+  if (!normalizedHash) {
+    return 0;
+  }
+  try {
+    return normalizeAudioSyncMs(localStorage.getItem(getSourceAudioSyncStorageKey(normalizedHash)));
+  } catch {
+    return 0;
+  }
+}
+
+function persistSourceAudioSyncMs(sourceHash, audioSyncMs) {
+  const normalizedHash = normalizeSourceHash(sourceHash);
+  if (!normalizedHash) {
+    return;
+  }
+  const normalizedSync = normalizeAudioSyncMs(audioSyncMs);
+  try {
+    if (normalizedSync === 0) {
+      localStorage.removeItem(getSourceAudioSyncStorageKey(normalizedHash));
+      return;
+    }
+    localStorage.setItem(getSourceAudioSyncStorageKey(normalizedHash), String(normalizedSync));
+  } catch {
+    // Ignore storage access issues.
+  }
+}
+
+function applyPreferredSourceAudioSync(sourceHash = selectedSourceHash) {
+  const normalizedHash = normalizeSourceHash(sourceHash);
+  preferredAudioSyncMs = normalizedHash ? getStoredSourceAudioSyncMs(normalizedHash) : 0;
 }
 
 function getSourceDisplayName(option = {}) {
@@ -1267,6 +1330,12 @@ function withPreferredAudioSyncForRemuxSource(source, audioSyncMs = preferredAud
     } else {
       url.searchParams.set("audioSyncMs", String(normalizedSync));
     }
+    const normalizedSourceHash = normalizeSourceHash(selectedSourceHash);
+    if (normalizedSourceHash) {
+      url.searchParams.set("sourceHash", normalizedSourceHash);
+    } else {
+      url.searchParams.delete("sourceHash");
+    }
     return `${url.pathname}?${url.searchParams.toString()}`;
   } catch {
     return source;
@@ -1279,6 +1348,7 @@ function buildSoftwareDecodeUrl(
   audioStreamIndex = -1,
   audioSyncMs = preferredAudioSyncMs,
   subtitleStreamIndex = selectedSubtitleStreamIndex,
+  sourceHash = selectedSourceHash,
 ) {
   const params = new URLSearchParams({ input: String(source || "") });
   if (Number.isFinite(startSeconds) && startSeconds > 0) {
@@ -1293,6 +1363,10 @@ function buildSoftwareDecodeUrl(
   const normalizedSync = normalizeAudioSyncMs(audioSyncMs);
   if (normalizedSync !== 0) {
     params.set("audioSyncMs", String(normalizedSync));
+  }
+  const normalizedSourceHash = normalizeSourceHash(sourceHash);
+  if (normalizedSourceHash) {
+    params.set("sourceHash", normalizedSourceHash);
   }
   return `/api/remux?${params.toString()}`;
 }
@@ -1325,7 +1399,15 @@ function parseTranscodeSource(source) {
       : -1;
     const rawAudioSyncMs = Number(url.searchParams.get("audioSyncMs") || 0);
     const audioSyncMs = normalizeAudioSyncMs(rawAudioSyncMs);
-    return { input, startSeconds, audioStreamIndex, subtitleStreamIndex, audioSyncMs };
+    const sourceHash = normalizeSourceHash(url.searchParams.get("sourceHash") || "");
+    return {
+      input,
+      startSeconds,
+      audioStreamIndex,
+      subtitleStreamIndex,
+      audioSyncMs,
+      sourceHash,
+    };
   } catch {
     return null;
   }
@@ -1358,6 +1440,10 @@ function setVideoSource(nextSource) {
     transcodeBaseOffsetSeconds = transcodeMeta.startSeconds;
     activeAudioStreamIndex = transcodeMeta.audioStreamIndex;
     activeAudioSyncMs = transcodeMeta.audioSyncMs;
+    if (isTmdbResolvedPlayback && transcodeMeta.sourceHash && transcodeMeta.sourceHash !== selectedSourceHash) {
+      selectedSourceHash = transcodeMeta.sourceHash;
+      persistSourceHashInUrl();
+    }
   } else {
     activeTranscodeInput = "";
     transcodeBaseOffsetSeconds = 0;
@@ -1447,6 +1533,79 @@ function setVideoSource(nextSource) {
   video.setAttribute("src", absoluteSource);
   video.load();
   scheduleStreamStallRecovery("Stream stalled, trying another source...");
+}
+
+function shouldAttemptNativePlayback(source) {
+  if (preferredNativePlaybackMode === "off" || nativePlaybackLaunched) {
+    return false;
+  }
+  try {
+    const url = new URL(String(source || ""), window.location.origin);
+    return url.pathname === "/api/remux";
+  } catch {
+    return false;
+  }
+}
+
+function getActiveSubtitleVttUrl() {
+  if (selectedSubtitleStreamIndex < 0) {
+    return "";
+  }
+  const selectedTrack = availableSubtitleTracks.find((track) => Number(track?.streamIndex) === selectedSubtitleStreamIndex);
+  return String(selectedTrack?.vttUrl || "").trim();
+}
+
+function tearDownBrowserPlaybackForNative() {
+  clearStreamStallRecovery();
+  destroyHlsInstance();
+  clearSubtitleTrack();
+  try {
+    video.pause();
+  } catch {
+    // Ignore pause errors.
+  }
+  video.removeAttribute("src");
+  video.load();
+}
+
+async function tryLaunchNativePlayback(source, startSeconds = 0) {
+  if (!shouldAttemptNativePlayback(source)) {
+    return false;
+  }
+  const sourceUrl = withPreferredAudioSyncForRemuxSource(source, preferredAudioSyncMs);
+  const safeStartSeconds = Number.isFinite(startSeconds) && startSeconds > 0
+    ? Math.floor(startSeconds)
+    : 0;
+  const payload = {
+    sourceUrl,
+    subtitleUrl: getActiveSubtitleVttUrl(),
+    title,
+    episode,
+    startSeconds: safeStartSeconds,
+    audioSyncMs: preferredAudioSyncMs,
+    sourceHash: selectedSourceHash,
+  };
+  try {
+    const response = await requestJson("/api/native/play", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }, 12000);
+    if (!response?.launched) {
+      return false;
+    }
+
+    nativePlaybackLaunched = true;
+    tearDownBrowserPlaybackForNative();
+    if (!hasExplicitSource) {
+      showResolver("Playing in mpv (native player).", { showStatus: true });
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function setTmdbSourceQueue(primaryUrl, fallbackUrls = []) {
@@ -1547,6 +1706,7 @@ async function resolveTmdbSourcesAndPlay() {
     .trim();
   preferredSubtitleLang = normalizeSubtitlePreference(preferredSubtitleLang);
   selectedSourceHash = normalizeSourceHash(resolved?.sourceHash || selectedSourceHash);
+  applyPreferredSourceAudioSync(selectedSourceHash);
   persistSourceHashInUrl();
 
   if (resolvedTrackPreferenceAudio && resolvedTrackPreferenceAudio !== "auto") {
@@ -1583,7 +1743,12 @@ async function resolveTmdbSourcesAndPlay() {
     renderSourceOptionButtons();
   }
   setTmdbSourceQueue(resolved.playableUrl, resolved.fallbackUrls);
-  setVideoSource(tmdbSourceQueue[0] || resolved.playableUrl);
+  const preferredSource = tmdbSourceQueue[0] || resolved.playableUrl;
+  if (await tryLaunchNativePlayback(preferredSource, resumeTime)) {
+    syncAudioState();
+    return { nativeLaunched: true, resolved };
+  }
+  setVideoSource(preferredSource);
   applySubtitleTrackByStreamIndex(selectedSubtitleStreamIndex);
   syncAudioState();
   hideResolver();
@@ -1606,6 +1771,7 @@ async function resolveTmdbSourcesAndPlay() {
   }
 
   await tryPlay();
+  return { nativeLaunched: false, resolved };
 }
 
 function attemptTmdbRecovery(message) {
@@ -1885,9 +2051,12 @@ function syncAudioState() {
       ? getLanguageDisplayLabel(selectedSubtitleTrack?.language)
       : (selectedSubtitleTrack?.label || getLanguageDisplayLabel(preferredSubtitleLang)))
     : "Off";
+  const syncHint = preferredAudioSyncMs
+    ? `, A/V ${preferredAudioSyncMs > 0 ? "+" : ""}${preferredAudioSyncMs}ms`
+    : "";
   toggleAudio?.setAttribute(
     "aria-label",
-    `Subtitles (${selectedSubtitleLabel})`,
+    `Subtitles (${selectedSubtitleLabel}${syncHint})`,
   );
 
   audioOptions.forEach((option) => {
@@ -1912,6 +2081,62 @@ function syncAudioState() {
     const sourceHash = normalizeSourceHash(option.dataset.sourceHash || "");
     option.setAttribute("aria-selected", sourceHash && sourceHash === selectedSourceHash ? "true" : "false");
   });
+}
+
+function getCurrentAudioSyncSourceHash() {
+  return normalizeSourceHash(
+    selectedSourceHash
+    || activePlaybackSession?.sourceHash
+    || "",
+  );
+}
+
+async function adjustSourceAudioSync(deltaMs = 0) {
+  if (nativePlaybackLaunched || !isTranscodeSourceActive() || !activeTranscodeInput) {
+    return;
+  }
+
+  const normalizedDelta = normalizeAudioSyncMs(deltaMs);
+  if (normalizedDelta === 0) {
+    return;
+  }
+
+  const nextAudioSync = normalizeAudioSyncMs(preferredAudioSyncMs + normalizedDelta);
+  if (nextAudioSync === preferredAudioSyncMs) {
+    return;
+  }
+
+  preferredAudioSyncMs = nextAudioSync;
+  const sourceHash = getCurrentAudioSyncSourceHash();
+  if (sourceHash) {
+    persistSourceAudioSyncMs(sourceHash, preferredAudioSyncMs);
+  }
+
+  const resumeFrom = getEffectiveCurrentTime();
+  const wasPaused = video.paused;
+  showResolver(
+    sourceHash
+      ? `Audio sync ${preferredAudioSyncMs > 0 ? "+" : ""}${preferredAudioSyncMs}ms (saved for this source).`
+      : `Audio sync ${preferredAudioSyncMs > 0 ? "+" : ""}${preferredAudioSyncMs}ms.`,
+    { showStatus: true },
+  );
+  setVideoSource(buildSoftwareDecodeUrl(
+    activeTranscodeInput,
+    0,
+    selectedAudioStreamIndex,
+    preferredAudioSyncMs,
+    selectedSubtitleStreamIndex,
+    sourceHash,
+  ));
+  applySubtitleTrackByStreamIndex(selectedSubtitleStreamIndex);
+  if (!wasPaused) {
+    await tryPlay();
+  }
+  if (resumeFrom > 1) {
+    seekToAbsoluteTime(resumeFrom);
+  }
+  hideResolver();
+  syncAudioState();
 }
 
 function getTimelineDurationSeconds() {
@@ -2499,6 +2724,7 @@ async function fetchTmdbSourceOptionsViaBackend() {
 
     if (selectedSourceHash && !availablePlaybackSources.some((item) => item.sourceHash === selectedSourceHash)) {
       selectedSourceHash = "";
+      applyPreferredSourceAudioSync(selectedSourceHash);
       persistSourceHashInUrl();
     }
     renderSourceOptionButtons();
@@ -2768,7 +2994,10 @@ audioOptionsContainer?.addEventListener("click", async (event) => {
     hasReportedSourceSuccess = false;
     showResolver("Switching audio language...");
     try {
-      await resolveTmdbSourcesAndPlay();
+      const result = await resolveTmdbSourcesAndPlay();
+      if (result?.nativeLaunched) {
+        return;
+      }
       if (resumeFrom > 1) {
         seekToAbsoluteTime(resumeFrom);
       }
@@ -2920,6 +3149,7 @@ sourceOptionsContainer?.addEventListener("click", async (event) => {
 
   const previousSourceHash = selectedSourceHash;
   selectedSourceHash = nextSourceHash;
+  applyPreferredSourceAudioSync(selectedSourceHash);
   persistSourceHashInUrl();
   syncAudioState();
   closeAudioPopover();
@@ -2934,7 +3164,10 @@ sourceOptionsContainer?.addEventListener("click", async (event) => {
   hasReportedSourceSuccess = false;
   showResolver("Switching source...");
   try {
-    await resolveTmdbSourcesAndPlay();
+    const result = await resolveTmdbSourcesAndPlay();
+    if (result?.nativeLaunched) {
+      return;
+    }
     if (!wasPaused) {
       await tryPlay();
     }
@@ -2943,6 +3176,7 @@ sourceOptionsContainer?.addEventListener("click", async (event) => {
     }
   } catch (error) {
     selectedSourceHash = previousSourceHash;
+    applyPreferredSourceAudioSync(selectedSourceHash);
     persistSourceHashInUrl();
     syncAudioState();
     const fallbackMessage = error?.message || "Unable to switch source.";
@@ -3299,6 +3533,18 @@ async function handleKeydown(event) {
     await toggleFullscreenMode();
   }
 
+  if (event.key === "[" || event.key === "]") {
+    if (isInteractiveTarget(event.target) || isResolvingSource()) {
+      return;
+    }
+    if (!hasActiveSource() || !isTranscodeSourceActive()) {
+      return;
+    }
+    event.preventDefault();
+    await adjustSourceAudioSync(event.key === "[" ? AUDIO_SYNC_STEP_MS : -AUDIO_SYNC_STEP_MS);
+    return;
+  }
+
   if (event.key === "Escape" && !document.fullscreenElement) {
     if (audioControl?.classList.contains("is-open")) {
       closeAudioPopover();
@@ -3350,6 +3596,7 @@ window.addEventListener("beforeunload", () => {
 
 async function initPlaybackSource() {
   hasAppliedInitialResume = false;
+  nativePlaybackLaunched = false;
   pendingTranscodeSeekRatio = null;
   resetPlaybackSessionState();
   availableAudioTracks = [];
@@ -3365,6 +3612,9 @@ async function initPlaybackSource() {
     const nextSource = shouldUseSoftwareDecode(src)
       ? buildSoftwareDecodeUrl(src, 0, -1, preferredAudioSyncMs)
       : src;
+    if (await tryLaunchNativePlayback(nextSource, resumeTime)) {
+      return;
+    }
     setVideoSource(nextSource);
     await tryPlay();
     return;
