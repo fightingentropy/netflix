@@ -84,6 +84,7 @@ const isTmdbMoviePlayback = Boolean(!hasExplicitSource && tmdbId && mediaType ==
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de", "it", "pt", "ja", "ko", "zh", "nl", "ro"]);
 const AUDIO_LANG_PREF_KEY_PREFIX = "netflix-audio-lang:movie:";
 const SUBTITLE_LANG_PREF_KEY_PREFIX = "netflix-subtitle-lang:movie:";
+const SUBTITLE_STREAM_PREF_KEY_PREFIX = "netflix-subtitle-stream:movie:";
 const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
 const SUBTITLE_COLOR_PREF_KEY = "netflix-subtitle-color-pref";
 const DEFAULT_SUBTITLE_COLOR = "#b8bcc3";
@@ -206,6 +207,36 @@ function getSubtitleLangPreferenceStorageKey(movieTmdbId) {
   return `${SUBTITLE_LANG_PREF_KEY_PREFIX}${String(movieTmdbId || "").trim()}`;
 }
 
+function getSubtitleStreamPreferenceStorageKey(movieTmdbId) {
+  return `${SUBTITLE_STREAM_PREF_KEY_PREFIX}${String(movieTmdbId || "").trim()}`;
+}
+
+function getStoredSubtitleStreamPreferenceForTmdbMovie(movieTmdbId) {
+  const normalizedTmdbId = String(movieTmdbId || "").trim();
+  if (!normalizedTmdbId) {
+    return { mode: "unset", streamIndex: -1 };
+  }
+
+  try {
+    const raw = String(localStorage.getItem(getSubtitleStreamPreferenceStorageKey(normalizedTmdbId)) || "")
+      .trim()
+      .toLowerCase();
+    if (!raw) {
+      return { mode: "unset", streamIndex: -1 };
+    }
+    if (raw === "off" || raw === "-1") {
+      return { mode: "off", streamIndex: -1 };
+    }
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      return { mode: "on", streamIndex: parsed };
+    }
+  } catch {
+    // Ignore storage access issues.
+  }
+  return { mode: "unset", streamIndex: -1 };
+}
+
 function getStoredSubtitleLangForTmdbMovie(movieTmdbId) {
   const normalizedTmdbId = String(movieTmdbId || "").trim();
   if (!normalizedTmdbId) {
@@ -233,6 +264,26 @@ function persistSubtitleLangPreference(lang) {
       return;
     }
     localStorage.setItem(key, normalizedLang);
+  } catch {
+    // Ignore storage access issues.
+  }
+}
+
+function persistSubtitleStreamPreference(streamIndex) {
+  if (!isTmdbMoviePlayback || !tmdbId) {
+    return;
+  }
+
+  const key = getSubtitleStreamPreferenceStorageKey(tmdbId);
+  const normalizedStreamIndex = Number.isInteger(Number(streamIndex))
+    ? Number(streamIndex)
+    : -1;
+  try {
+    if (normalizedStreamIndex < 0) {
+      localStorage.setItem(key, "off");
+      return;
+    }
+    localStorage.setItem(key, String(normalizedStreamIndex));
   } catch {
     // Ignore storage access issues.
   }
@@ -966,6 +1017,56 @@ async function tryNextTmdbSource() {
   return true;
 }
 
+function applyStoredSubtitleSelectionPreference() {
+  if (!isTmdbMoviePlayback || hasSubtitleLangParam) {
+    return;
+  }
+
+  const storedSubtitleStreamPreference = getStoredSubtitleStreamPreferenceForTmdbMovie(tmdbId);
+
+  if (storedSubtitleStreamPreference.mode === "off") {
+    selectedSubtitleStreamIndex = -1;
+    preferredSubtitleLang = "off";
+    return;
+  }
+
+  if (storedSubtitleStreamPreference.mode !== "on") {
+    return;
+  }
+
+  const exactTrack = availableSubtitleTracks.find(
+    (track) => Number(track?.streamIndex) === storedSubtitleStreamPreference.streamIndex,
+  );
+  if (exactTrack) {
+    selectedSubtitleStreamIndex = Number(exactTrack.streamIndex);
+    const exactLanguage = normalizeSubtitlePreference(exactTrack.language || preferredSubtitleLang);
+    if (exactLanguage) {
+      preferredSubtitleLang = exactLanguage;
+    }
+    return;
+  }
+
+  const preferredLanguage = normalizeSubtitlePreference(preferredSubtitleLang);
+  const fallbackTrack = availableSubtitleTracks.find((track) => (
+    preferredLanguage
+    && preferredLanguage !== "off"
+    && normalizeSubtitlePreference(track?.language || "") === preferredLanguage
+  )) || availableSubtitleTracks[0] || null;
+  if (!fallbackTrack) {
+    selectedSubtitleStreamIndex = -1;
+    return;
+  }
+
+  const fallbackStreamIndex = Number(fallbackTrack.streamIndex);
+  if (Number.isInteger(fallbackStreamIndex) && fallbackStreamIndex >= 0) {
+    selectedSubtitleStreamIndex = fallbackStreamIndex;
+  }
+  const fallbackLanguage = normalizeSubtitlePreference(fallbackTrack.language || preferredLanguage);
+  if (fallbackLanguage) {
+    preferredSubtitleLang = fallbackLanguage;
+  }
+}
+
 async function resolveTmdbSourcesAndPlay() {
   const resolved = await resolveTmdbMovieViaBackend(tmdbId);
   activePlaybackSession = resolved?.session || null;
@@ -989,7 +1090,16 @@ async function resolveTmdbSourcesAndPlay() {
     preferredAudioLang = resolvedTrackPreferenceAudio;
     persistAudioLangPreference(preferredAudioLang);
   }
+  const subtitleStreamPreferenceBeforeResolve = getStoredSubtitleStreamPreferenceForTmdbMovie(tmdbId);
+  applyStoredSubtitleSelectionPreference();
   persistSubtitleLangPreference(preferredSubtitleLang);
+  if (
+    subtitleStreamPreferenceBeforeResolve.mode !== "unset"
+    || selectedSubtitleStreamIndex >= 0
+    || preferredSubtitleLang === "off"
+  ) {
+    persistSubtitleStreamPreference(selectedSubtitleStreamIndex);
+  }
 
   rebuildTrackOptionButtons();
   setTmdbSourceQueue(resolved.playableUrl, resolved.fallbackUrls);
@@ -1863,6 +1973,7 @@ subtitleOptionsContainer?.addEventListener("click", (event) => {
     : "off";
   preferredSubtitleLang = normalizeSubtitlePreference(preferredSubtitleLang);
   persistSubtitleLangPreference(preferredSubtitleLang);
+  persistSubtitleStreamPreference(selectedSubtitleStreamIndex);
   void persistTrackPreferencesOnServer({
     subtitleLang: preferredSubtitleLang,
   });
