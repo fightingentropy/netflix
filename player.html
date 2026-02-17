@@ -64,7 +64,7 @@
                 >
                   <img src="player-control-icons/right-captions.svg" class="control-icon-image" alt="" />
                 </button>
-                <div id="audioMenu" class="speed-popover audio-popover" role="listbox" aria-label="Subtitle tracks">
+                <div id="audioMenu" class="speed-popover audio-popover subtitles-popover" role="listbox" aria-label="Subtitle tracks">
                   <div class="audio-popover-grid subtitles-only">
                     <section class="audio-popover-column audio-track-column">
                       <h3 class="audio-column-title">Audio</h3>
@@ -133,8 +133,11 @@
     </div>
 
     <div id="resolverOverlay" class="resolver-overlay" hidden>
+      <div id="resolverLoader" class="seek-loading-indicator resolver-loader" role="status" aria-live="polite" aria-label="Loading video">
+        <span class="seek-netflix-spinner" aria-hidden="true"></span>
+      </div>
       <div class="resolver-card" role="status" aria-live="polite">
-        <p id="resolverStatus" class="resolver-status">Resolving stream...</p>
+        <p id="resolverStatus" class="resolver-status" hidden>Unable to resolve this stream.</p>
       </div>
     </div>
 

@@ -131,10 +131,65 @@ body.modal-open {
   width: 34px;
   height: 34px;
   border-radius: 6px;
-  background:
+  --avatar-fill:
     radial-gradient(circle at 28% 20%, rgba(255, 255, 255, 0.86) 6%, transparent 20%),
     linear-gradient(145deg, #2686f7, #1447b8);
+  background: var(--avatar-fill);
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+
+.avatar-style-blue {
+  --avatar-fill:
+    radial-gradient(circle at 28% 20%, rgba(255, 255, 255, 0.86) 6%, transparent 20%),
+    linear-gradient(145deg, #2686f7, #1447b8);
+}
+
+.avatar-style-crimson {
+  --avatar-fill:
+    radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.9) 6%, transparent 21%),
+    linear-gradient(145deg, #f0667b, #8f1028);
+}
+
+.avatar-style-emerald {
+  --avatar-fill:
+    radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.88) 6%, transparent 21%),
+    linear-gradient(145deg, #4fd9b0, #0d6f56);
+}
+
+.avatar-style-violet {
+  --avatar-fill:
+    radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.9) 6%, transparent 21%),
+    linear-gradient(145deg, #9f78ff, #4430a8);
+}
+
+.avatar-style-amber {
+  --avatar-fill:
+    radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.88) 6%, transparent 21%),
+    linear-gradient(145deg, #ffbe55, #a55b00);
+}
+
+.avatar-custom-image {
+  background: rgba(18, 18, 20, 0.9);
+  background-image: var(--avatar-image);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.account-avatar-btn {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+}
+
+.account-avatar-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.75);
+  outline-offset: 2px;
 }
 
 .account-menu {

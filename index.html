@@ -39,7 +39,16 @@
           </svg>
         </button>
         <div id="accountMenu" class="account-menu">
-          <div class="avatar" aria-hidden="true"></div>
+          <button
+            id="accountAvatarButton"
+            class="account-avatar-btn"
+            aria-label="Account menu"
+            aria-haspopup="menu"
+            aria-controls="accountMenuPanel"
+            aria-expanded="false"
+          >
+            <div id="accountAvatar" class="avatar avatar-style-blue" aria-hidden="true"></div>
+          </button>
           <button id="accountMenuToggle" class="icon-btn" aria-label="Account menu" aria-haspopup="menu" aria-expanded="false">
             <svg viewBox="0 0 12 8" aria-hidden="true">
               <path d="M1 1.5 6 6.5l5-5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" />

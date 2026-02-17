@@ -46,6 +46,12 @@ body {
   background: #000;
 }
 
+#playerVideo::cue {
+  color: #b8bcc3;
+  background: transparent;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.82);
+}
+
 .resolver-overlay {
   position: absolute;
   inset: 0;
@@ -53,7 +59,7 @@ body {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: radial-gradient(circle at center, rgba(6, 6, 6, 0.22) 0%, rgba(6, 6, 6, 0.74) 70%);
+  background: radial-gradient(circle at center, rgba(0, 0, 0, 0.04) 0%, rgba(0, 0, 0, 0.3) 72%);
 }
 
 .resolver-overlay[hidden] {
@@ -99,35 +105,27 @@ body {
   background: rgba(12, 12, 12, 0.86);
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
   padding: 22px 20px;
+  display: none;
+  justify-items: center;
+  gap: 10px;
 }
 
 .resolver-status {
   margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
   font-size: 1.03rem;
-  line-height: 1.45;
+  line-height: 1.35;
   color: #f1f1f1;
-}
-
-.resolver-status::before {
-  content: "";
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.26);
-  border-top-color: #fff;
-  animation: resolver-spin 0.75s linear infinite;
+  text-align: center;
+  max-width: 420px;
 }
 
 .resolver-overlay.is-error .resolver-card {
+  display: grid;
   border-color: rgba(255, 118, 118, 0.62);
 }
 
-.resolver-overlay.is-error .resolver-status::before {
-  animation: none;
-  border-top-color: rgba(255, 118, 118, 0.95);
+.resolver-overlay.is-error .resolver-loader {
+  display: none;
 }
 
 @keyframes resolver-spin {
@@ -452,6 +450,13 @@ body {
     radial-gradient(circle at 20% 88%, rgba(255, 255, 255, 0.06), transparent 58%);
 }
 
+.audio-popover.subtitles-popover {
+  right: 0;
+  width: min(540px, calc(100vw - 22px));
+  max-height: min(54vh, 430px);
+  padding: 12px 0 10px;
+}
+
 .audio-popover-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -460,7 +465,7 @@ body {
 
 .audio-popover-grid.subtitles-only {
   grid-template-columns: minmax(0, 1fr);
-  max-width: 620px;
+  max-width: 100%;
 }
 
 .audio-popover-grid.subtitles-only .audio-track-column {
@@ -469,30 +474,30 @@ body {
 
 .audio-popover-grid.subtitles-only .audio-subtitle-column {
   border-left: 0;
-  padding: 0 24px 6px;
+  padding: 0 14px 4px;
 }
 
 .audio-popover-grid.subtitles-only .audio-column-title {
-  margin: 0 0 10px;
-  font-size: clamp(1.45rem, 2.4vw, 2.2rem);
+  margin: 0 0 8px;
+  font-size: clamp(1.3rem, 2.1vw, 1.85rem);
 }
 
 .audio-popover-grid.subtitles-only .audio-options {
-  max-height: min(40vh, 320px);
-  padding-right: 8px;
-  margin-right: -2px;
+  max-height: min(34vh, 250px);
+  padding-right: 0;
+  margin-right: 0;
   gap: 1px;
 }
 
 .audio-popover-grid.subtitles-only .audio-option {
-  min-height: 48px;
-  padding: 8px 10px 8px 42px;
-  font-size: clamp(1.2rem, 1.55vw, 1.7rem);
+  min-height: 42px;
+  padding: 6px 8px 6px 36px;
+  font-size: clamp(1.05rem, 1.25vw, 1.35rem);
 }
 
 .audio-popover-grid.subtitles-only .audio-option::before {
-  left: 10px;
-  font-size: 1.55rem;
+  left: 9px;
+  font-size: 1.25rem;
 }
 
 .audio-popover-column {
@@ -726,6 +731,13 @@ body {
     padding: 12px 0 10px;
   }
 
+  .audio-popover.subtitles-popover {
+    right: 0;
+    width: min(84vw, 340px);
+    max-height: min(46vh, 300px);
+    padding: 10px 0 8px;
+  }
+
   .audio-popover-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -745,31 +757,31 @@ body {
     border-top: 0;
     margin-top: 0;
     padding-top: 0;
-    padding-left: 14px;
-    padding-right: 14px;
-    padding-bottom: 4px;
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-bottom: 2px;
   }
 
   .audio-popover-grid.subtitles-only .audio-column-title {
-    margin-bottom: 8px;
-    font-size: clamp(1.25rem, 5.1vw, 1.7rem);
+    margin-bottom: 6px;
+    font-size: clamp(1.1rem, 4.5vw, 1.45rem);
   }
 
   .audio-popover-grid.subtitles-only .audio-options {
-    max-height: min(26vh, 180px);
-    padding-right: 6px;
-    margin-right: -2px;
+    max-height: min(24vh, 150px);
+    padding-right: 0;
+    margin-right: 0;
   }
 
   .audio-popover-grid.subtitles-only .audio-option {
-    min-height: 40px;
-    padding: 6px 8px 6px 34px;
-    font-size: clamp(0.95rem, 4.1vw, 1.15rem);
+    min-height: 36px;
+    padding: 5px 7px 5px 30px;
+    font-size: clamp(0.9rem, 3.8vw, 1.05rem);
   }
 
   .audio-popover-grid.subtitles-only .audio-option::before {
-    left: 8px;
-    font-size: 1.15rem;
+    left: 7px;
+    font-size: 1rem;
   }
 
   .audio-column-title {

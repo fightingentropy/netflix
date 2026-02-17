@@ -17,11 +17,12 @@ const subtitleOptionsContainer = document.getElementById("subtitleOptions");
 const episodeLabel = document.getElementById("episodeLabel");
 const resolverOverlay = document.getElementById("resolverOverlay");
 const resolverStatus = document.getElementById("resolverStatus");
+const resolverLoader = document.getElementById("resolverLoader");
 const seekLoadingOverlay = document.getElementById("seekLoadingOverlay");
 const playerShell = document.querySelector(".player-shell");
 
 const playbackRates = [0.5, 0.75, 1, 1.25, 1.5];
-const controlsHideDelayMs = 5000;
+const controlsHideDelayMs = 3000;
 const sessionProgressSyncIntervalMs = 10000;
 const sessionProgressMinimumDeltaSeconds = 2;
 const singleClickToggleDelayMs = 220;
@@ -76,15 +77,28 @@ const hasAudioLangParam = params.has("audioLang");
 const audioLangParam = (params.get("audioLang") || "auto").trim().toLowerCase();
 const hasQualityParam = params.has("quality");
 const qualityParam = (params.get("quality") || "auto").trim().toLowerCase();
+const hasSubtitleLangParam = params.has("subtitleLang");
 const subtitleLangParam = (params.get("subtitleLang") || "").trim().toLowerCase();
 const hasExplicitSource = Boolean(src);
 const isTmdbMoviePlayback = Boolean(!hasExplicitSource && tmdbId && mediaType === "movie");
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de", "it", "pt", "ja", "ko", "zh", "nl", "ro"]);
 const AUDIO_LANG_PREF_KEY_PREFIX = "netflix-audio-lang:movie:";
+const SUBTITLE_LANG_PREF_KEY_PREFIX = "netflix-subtitle-lang:movie:";
 const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
+const SUBTITLE_COLOR_PREF_KEY = "netflix-subtitle-color-pref";
+const DEFAULT_SUBTITLE_COLOR = "#b8bcc3";
 const supportedQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
 const AUDIO_SYNC_MIN_MS = -1500;
 const AUDIO_SYNC_MAX_MS = 1500;
+const RESUME_SAVE_MIN_INTERVAL_MS = 3000;
+const RESUME_SAVE_MIN_DELTA_SECONDS = 1.5;
+const RESUME_CLEAR_AT_END_THRESHOLD_SECONDS = 8;
+const SUBTITLE_LINE_FROM_BOTTOM = -2;
+const SUBTITLE_MATTE_MIN_HEIGHT_PX = 18;
+const SUBTITLE_MATTE_TOP_PADDING_PX = 6;
+const SUBTITLE_MATTE_BOTTOM_PADDING_PX = 14;
+const SUBTITLE_MATTE_BOTTOM_TARGET_OFFSET_PX = 38;
+const SUBTITLE_MATTE_TOP_GUARD_RATIO = 0.35;
 const subtitleLanguageNames = {
   off: "Off",
   en: "English",
@@ -123,6 +137,43 @@ function getStoredPreferredQuality() {
   }
 }
 
+function normalizeSubtitleColor(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(raw)) {
+    return raw;
+  }
+  if (/^#[0-9a-f]{3}$/.test(raw)) {
+    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`;
+  }
+  return DEFAULT_SUBTITLE_COLOR;
+}
+
+function getStoredSubtitleColorPreference() {
+  try {
+    return normalizeSubtitleColor(localStorage.getItem(SUBTITLE_COLOR_PREF_KEY));
+  } catch {
+    return DEFAULT_SUBTITLE_COLOR;
+  }
+}
+
+function applySubtitleCueColor(colorValue = getStoredSubtitleColorPreference()) {
+  const normalizedColor = normalizeSubtitleColor(colorValue);
+  let styleElement = document.getElementById("subtitleCueColorStyle");
+  if (!(styleElement instanceof HTMLStyleElement)) {
+    styleElement = document.createElement("style");
+    styleElement.id = "subtitleCueColorStyle";
+    document.head.appendChild(styleElement);
+  }
+
+  styleElement.textContent = `
+    #playerVideo::cue {
+      color: ${normalizedColor};
+      background: transparent;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.82);
+    }
+  `;
+}
+
 function normalizeAudioSyncMs(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -135,6 +186,56 @@ function normalizeAudioSyncMs(value) {
 function isRecognizedAudioLang(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return normalized === "auto" || /^[a-z]{2}$/.test(normalized);
+}
+
+function normalizeSubtitlePreference(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || raw === "auto") {
+    return "";
+  }
+  if (raw === "off" || raw === "none" || raw === "disabled") {
+    return "off";
+  }
+  if (/^[a-z]{2}$/.test(raw)) {
+    return raw;
+  }
+  return raw.slice(0, 2);
+}
+
+function getSubtitleLangPreferenceStorageKey(movieTmdbId) {
+  return `${SUBTITLE_LANG_PREF_KEY_PREFIX}${String(movieTmdbId || "").trim()}`;
+}
+
+function getStoredSubtitleLangForTmdbMovie(movieTmdbId) {
+  const normalizedTmdbId = String(movieTmdbId || "").trim();
+  if (!normalizedTmdbId) {
+    return "";
+  }
+
+  try {
+    return normalizeSubtitlePreference(localStorage.getItem(getSubtitleLangPreferenceStorageKey(normalizedTmdbId)));
+  } catch {
+    // Ignore storage access issues.
+  }
+  return "";
+}
+
+function persistSubtitleLangPreference(lang) {
+  if (!isTmdbMoviePlayback || !tmdbId) {
+    return;
+  }
+
+  const normalizedLang = normalizeSubtitlePreference(lang);
+  const key = getSubtitleLangPreferenceStorageKey(tmdbId);
+  try {
+    if (!normalizedLang) {
+      localStorage.removeItem(key);
+      return;
+    }
+    localStorage.setItem(key, normalizedLang);
+  } catch {
+    // Ignore storage access issues.
+  }
 }
 
 function getStoredAudioLangForTmdbMovie(movieTmdbId) {
@@ -193,12 +294,24 @@ if (isTmdbMoviePlayback && !hasQualityParam) {
   preferredQuality = getStoredPreferredQuality();
 }
 let preferredAudioSyncMs = 0;
-preferredSubtitleLang = subtitleLangParam === "off" ? "off" : subtitleLangParam;
+preferredSubtitleLang = normalizeSubtitlePreference(subtitleLangParam);
+if (isTmdbMoviePlayback && !hasSubtitleLangParam) {
+  preferredSubtitleLang = getStoredSubtitleLangForTmdbMovie(tmdbId) || preferredSubtitleLang;
+}
+if (isTmdbMoviePlayback && hasSubtitleLangParam) {
+  persistSubtitleLangPreference(preferredSubtitleLang);
+}
 const sourceIdentity = src || (isTmdbMoviePlayback ? `tmdb:${tmdbId}` : "intro.mp4");
 const resumeStorageKey = `netflix-resume:${sourceIdentity}`;
 let resumeTime = 0;
+let lastPersistedResumeTime = 0;
+let lastPersistedResumeAt = 0;
 try {
-  localStorage.removeItem(resumeStorageKey);
+  const storedResume = Number(localStorage.getItem(resumeStorageKey));
+  if (Number.isFinite(storedResume) && storedResume > 0) {
+    resumeTime = storedResume;
+    lastPersistedResumeTime = storedResume;
+  }
 } catch {
   // Ignore storage access issues.
 }
@@ -251,11 +364,17 @@ function showResolver(message, { isError = false } = {}) {
     return;
   }
 
-  if (!resolverOverlay || !resolverStatus) {
+  if (!resolverOverlay) {
     return;
   }
 
-  resolverStatus.textContent = message;
+  if (resolverStatus) {
+    resolverStatus.textContent = String(message || "").trim() || "Unable to load this video.";
+    resolverStatus.hidden = !isError;
+  }
+  if (resolverLoader) {
+    resolverLoader.hidden = isError;
+  }
   hideSeekLoadingIndicator();
   resolverOverlay.hidden = false;
   resolverOverlay.classList.toggle("is-error", isError);
@@ -268,6 +387,12 @@ function hideResolver() {
 
   resolverOverlay.hidden = true;
   resolverOverlay.classList.remove("is-error");
+  if (resolverLoader) {
+    resolverLoader.hidden = false;
+  }
+  if (resolverStatus) {
+    resolverStatus.hidden = true;
+  }
 }
 
 function hasActiveSource() {
@@ -324,12 +449,26 @@ function parseHlsMasterSource(source) {
   }
 }
 
+function shouldMapSubtitleStreamIndex(streamIndex) {
+  const safeStreamIndex = Number.isFinite(streamIndex) ? Math.floor(streamIndex) : -1;
+  if (safeStreamIndex < 0) {
+    return false;
+  }
+
+  const selectedTrack = availableSubtitleTracks.find((track) => Number(track?.streamIndex) === safeStreamIndex);
+  if (!selectedTrack) {
+    return true;
+  }
+
+  return !selectedTrack.isExternal;
+}
+
 function buildHlsPlaybackUrl(input, audioStreamIndex = -1, subtitleStreamIndex = -1) {
   const query = new URLSearchParams({ input: String(input || "") });
   if (Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0) {
     query.set("audioStream", String(Math.floor(audioStreamIndex)));
   }
-  if (Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0) {
+  if (shouldMapSubtitleStreamIndex(subtitleStreamIndex)) {
     query.set("subtitleStream", String(Math.floor(subtitleStreamIndex)));
   }
   return `/api/hls/master.m3u8?${query.toString()}`;
@@ -366,6 +505,80 @@ function hideAllSubtitleTracks() {
   });
 }
 
+function computeSubtitleLinePercentInBottomMatte() {
+  const viewportWidth = Number(video.clientWidth || 0);
+  const viewportHeight = Number(video.clientHeight || 0);
+  const mediaWidth = Number(video.videoWidth || 0);
+  const mediaHeight = Number(video.videoHeight || 0);
+  if (viewportWidth <= 0 || viewportHeight <= 0 || mediaWidth <= 0 || mediaHeight <= 0) {
+    return null;
+  }
+
+  const scale = Math.min(viewportWidth / mediaWidth, viewportHeight / mediaHeight);
+  if (!Number.isFinite(scale) || scale <= 0) {
+    return null;
+  }
+  const renderedHeight = mediaHeight * scale;
+  const matteHeight = Math.max(0, (viewportHeight - renderedHeight) / 2);
+  if (!Number.isFinite(matteHeight) || matteHeight < SUBTITLE_MATTE_MIN_HEIGHT_PX) {
+    return null;
+  }
+
+  const bottomMatteTop = viewportHeight - matteHeight;
+  const matteTopBoundary = bottomMatteTop + SUBTITLE_MATTE_TOP_PADDING_PX;
+  const matteBottomBoundary = viewportHeight - SUBTITLE_MATTE_BOTTOM_PADDING_PX;
+  if (matteBottomBoundary <= matteTopBoundary) {
+    return null;
+  }
+
+  const guardedTopTarget = matteTopBoundary + (matteHeight * SUBTITLE_MATTE_TOP_GUARD_RATIO);
+  const preferredBottomTarget = viewportHeight - SUBTITLE_MATTE_BOTTOM_TARGET_OFFSET_PX;
+  const targetY = Math.min(
+    matteBottomBoundary,
+    Math.max(matteTopBoundary, Math.max(guardedTopTarget, preferredBottomTarget)),
+  );
+  const linePercent = (targetY / viewportHeight) * 100;
+  return Math.max(0, Math.min(100, Number(linePercent.toFixed(2))));
+}
+
+function nudgeSubtitleTrackPlacementUp(textTrack) {
+  if (!textTrack || !textTrack.cues) {
+    return;
+  }
+  const matteCenteredLinePercent = computeSubtitleLinePercentInBottomMatte();
+
+  Array.from(textTrack.cues).forEach((cue) => {
+    if (!cue || !("line" in cue)) {
+      return;
+    }
+
+    try {
+      if (matteCenteredLinePercent !== null) {
+        if ("snapToLines" in cue) {
+          cue.snapToLines = false;
+        }
+        cue.line = matteCenteredLinePercent;
+      } else {
+        if ("snapToLines" in cue) {
+          cue.snapToLines = true;
+        }
+        cue.line = SUBTITLE_LINE_FROM_BOTTOM;
+      }
+    } catch {
+      // Ignore cue positioning failures for unsupported cue types.
+    }
+  });
+}
+
+function refreshActiveSubtitlePlacement() {
+  const activeTrack = subtitleTrackElement?.track
+    || Array.from(video.textTracks || []).find((track) => track.mode === "showing")
+    || null;
+  if (activeTrack) {
+    nudgeSubtitleTrackPlacementUp(activeTrack);
+  }
+}
+
 function showSubtitleTrackElement(trackElement) {
   if (!trackElement) {
     return;
@@ -373,11 +586,13 @@ function showSubtitleTrackElement(trackElement) {
   hideAllSubtitleTracks();
   const directTrack = trackElement.track;
   if (directTrack) {
+    nudgeSubtitleTrackPlacementUp(directTrack);
     directTrack.mode = "showing";
     return;
   }
   const fallbackTrack = Array.from(video.textTracks || []).find((textTrack) => textTrack.label === trackElement.label);
   if (fallbackTrack) {
+    nudgeSubtitleTrackPlacementUp(fallbackTrack);
     fallbackTrack.mode = "showing";
   }
 }
@@ -440,6 +655,7 @@ function applySubtitleTrackByStreamIndex(streamIndex) {
   trackElement.src = `${selectedTrack.vttUrl}${selectedTrack.vttUrl.includes("?") ? "&" : "?"}ts=${Date.now()}`;
   trackElement.default = true;
   trackElement.addEventListener("load", () => {
+    nudgeSubtitleTrackPlacementUp(trackElement.track);
     showSubtitleTrackElement(trackElement);
   });
   video.appendChild(trackElement);
@@ -506,7 +722,10 @@ function rebuildTrackOptionButtons() {
     button.dataset.optionType = "subtitle";
     button.dataset.subtitleStream = String(track.streamIndex);
     button.dataset.subtitleLang = String(track.language || "");
-    button.textContent = track.label || `${getLanguageDisplayLabel(track.language)} subtitles`;
+    const cleanLabel = track.isExternal
+      ? getLanguageDisplayLabel(track.language)
+      : (track.label || `${getLanguageDisplayLabel(track.language)} subtitles`);
+    button.textContent = cleanLabel;
     if (!track.isTextBased || !track.vttUrl) {
       button.disabled = true;
       button.textContent = `${button.textContent} (Unsupported)`;
@@ -562,7 +781,7 @@ function buildSoftwareDecodeUrl(
   if (Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0) {
     params.set("audioStream", String(Math.floor(audioStreamIndex)));
   }
-  if (Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0) {
+  if (shouldMapSubtitleStreamIndex(subtitleStreamIndex)) {
     params.set("subtitleStream", String(Math.floor(subtitleStreamIndex)));
   }
   const normalizedSync = normalizeAudioSyncMs(audioSyncMs);
@@ -763,13 +982,14 @@ async function resolveTmdbSourcesAndPlay() {
     .trim()
     .toLowerCase();
   preferredSubtitleLang = String(resolved?.preferences?.subtitleLang || preferredSubtitleLang || "")
-    .trim()
-    .toLowerCase();
+    .trim();
+  preferredSubtitleLang = normalizeSubtitlePreference(preferredSubtitleLang);
 
   if (resolvedTrackPreferenceAudio && resolvedTrackPreferenceAudio !== "auto") {
     preferredAudioLang = resolvedTrackPreferenceAudio;
     persistAudioLangPreference(preferredAudioLang);
   }
+  persistSubtitleLangPreference(preferredSubtitleLang);
 
   rebuildTrackOptionButtons();
   setTmdbSourceQueue(resolved.playableUrl, resolved.fallbackUrls);
@@ -878,9 +1098,13 @@ function syncSpeedState() {
 }
 
 function syncAudioState() {
+  const selectedSubtitleTrack = selectedSubtitleStreamIndex >= 0
+    ? availableSubtitleTracks.find((track) => Number(track?.streamIndex) === selectedSubtitleStreamIndex)
+    : null;
   const selectedSubtitleLabel = selectedSubtitleStreamIndex >= 0
-    ? (availableSubtitleTracks.find((track) => Number(track?.streamIndex) === selectedSubtitleStreamIndex)?.label
-      || getLanguageDisplayLabel(preferredSubtitleLang))
+    ? (selectedSubtitleTrack?.isExternal
+      ? getLanguageDisplayLabel(selectedSubtitleTrack?.language)
+      : (selectedSubtitleTrack?.label || getLanguageDisplayLabel(preferredSubtitleLang)))
     : "Off";
   toggleAudio?.setAttribute(
     "aria-label",
@@ -1115,7 +1339,53 @@ function syncSeekState() {
 }
 
 function persistResumeTime(force = false) {
-  void force;
+  const effectiveCurrentTime = Math.max(0, getEffectiveCurrentTime());
+  if (!Number.isFinite(effectiveCurrentTime)) {
+    return;
+  }
+
+  const seekScaleDurationSeconds = getSeekScaleDurationSeconds();
+  const isNearEnd = Number.isFinite(seekScaleDurationSeconds)
+    && seekScaleDurationSeconds > 0
+    && effectiveCurrentTime >= Math.max(0, seekScaleDurationSeconds - RESUME_CLEAR_AT_END_THRESHOLD_SECONDS);
+
+  try {
+    if (isNearEnd) {
+      localStorage.removeItem(resumeStorageKey);
+      resumeTime = 0;
+      lastPersistedResumeTime = 0;
+      lastPersistedResumeAt = 0;
+      return;
+    }
+
+    if (effectiveCurrentTime < 1) {
+      if (force) {
+        localStorage.removeItem(resumeStorageKey);
+        resumeTime = 0;
+        lastPersistedResumeTime = 0;
+        lastPersistedResumeAt = 0;
+      }
+      return;
+    }
+
+    const now = Date.now();
+    if (!force) {
+      if (now - lastPersistedResumeAt < RESUME_SAVE_MIN_INTERVAL_MS) {
+        return;
+      }
+      if (Math.abs(effectiveCurrentTime - lastPersistedResumeTime) < RESUME_SAVE_MIN_DELTA_SECONDS) {
+        return;
+      }
+    }
+
+    const nextResumeTime = Number(effectiveCurrentTime.toFixed(2));
+    localStorage.setItem(resumeStorageKey, String(nextResumeTime));
+    resumeTime = nextResumeTime;
+    lastPersistedResumeTime = nextResumeTime;
+    lastPersistedResumeAt = now;
+  } catch {
+    // Ignore storage access issues.
+  }
 }
 
 function buildPlaybackSessionProgressPayload(positionSeconds, healthState = "healthy", lastError = "", eventType = "") {
@@ -1349,6 +1619,7 @@ function persistQualityInUrl() {
 }
 
 goBack.addEventListener("click", () => {
+  persistResumeTime(true);
   if (window.history.length > 1) {
     window.history.back();
     return;
@@ -1590,6 +1861,8 @@ subtitleOptionsContainer?.addEventListener("click", (event) => {
   preferredSubtitleLang = selectedSubtitleStreamIndex >= 0
     ? String(option.dataset.subtitleLang || "")
     : "off";
+  preferredSubtitleLang = normalizeSubtitlePreference(preferredSubtitleLang);
+  persistSubtitleLangPreference(preferredSubtitleLang);
   void persistTrackPreferencesOnServer({
     subtitleLang: preferredSubtitleLang,
   });
@@ -1685,6 +1958,7 @@ seekBar.addEventListener("input", () => {
 });
 
 video.addEventListener("loadedmetadata", () => {
+  refreshActiveSubtitlePlacement();
   const timelineDurationSeconds = getTimelineDurationSeconds();
   const seekScaleDurationSeconds = getSeekScaleDurationSeconds();
   if (!hasAppliedInitialResume && Number.isFinite(resumeTime) && resumeTime > 1 && resumeTime < seekScaleDurationSeconds - 8) {
@@ -1710,6 +1984,8 @@ video.addEventListener("loadedmetadata", () => {
   syncSeekState();
   paintSeekProgress(seekBar.value, getBufferedSeekValue(seekScaleDurationSeconds));
 });
+window.addEventListener("resize", refreshActiveSubtitlePlacement);
+document.addEventListener("fullscreenchange", refreshActiveSubtitlePlacement);
 
 video.addEventListener("timeupdate", syncSeekState);
 video.addEventListener("progress", syncSeekState);
@@ -1784,7 +2060,14 @@ video.addEventListener("ended", () => {
     }
   }
 
-  localStorage.removeItem(resumeStorageKey);
+  try {
+    localStorage.removeItem(resumeStorageKey);
+  } catch {
+    // Ignore storage access issues.
+  }
+  resumeTime = 0;
+  lastPersistedResumeTime = 0;
+  lastPersistedResumeAt = 0;
   void syncPlaybackSessionProgress({
     force: true,
     positionSeconds: 0,
@@ -1923,12 +2206,18 @@ async function handleKeydown(event) {
       closeSpeedPopover(false);
       return;
     }
-
+    persistResumeTime(true);
     window.location.href = "index.html";
   }
 }
 
 window.addEventListener("keydown", handleKeydown, { capture: true });
+window.addEventListener("storage", (event) => {
+  if (event.key && event.key !== SUBTITLE_COLOR_PREF_KEY) {
+    return;
+  }
+  applySubtitleCueColor(event.newValue);
+});
 window.addEventListener("beforeunload", () => {
   clearSingleClickPlaybackToggle();
   hideSeekLoadingIndicator();
@@ -1975,7 +2264,7 @@ async function initPlaybackSource() {
   }
 
   try {
-    showResolver("Preparing playback link...");
+    showResolver("Loading video...");
     await resolveTmdbSourcesAndPlay();
   } catch (error) {
     console.error("Failed to resolve TMDB playback via Real-Debrid:", error);
@@ -1988,6 +2277,7 @@ syncPlayState();
 syncSpeedState();
 rebuildTrackOptionButtons();
 syncAudioState();
+applySubtitleCueColor();
 stripAudioSyncFromPageUrl();
 if (isTmdbMoviePlayback && !hasAudioLangParam && preferredAudioLang !== "auto") {
   persistAudioLangInUrl();

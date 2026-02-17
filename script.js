@@ -8,6 +8,8 @@ const cardsContainer = document.getElementById("cardsContainer");
 const accountMenu = document.getElementById("accountMenu");
 const accountMenuToggle = document.getElementById("accountMenuToggle");
 const accountMenuPanel = document.getElementById("accountMenuPanel");
+const accountAvatarButton = document.getElementById("accountAvatarButton");
+const accountAvatar = document.getElementById("accountAvatar");
 const detailsModal = document.getElementById("detailsModal");
 const detailsCloseButton = document.getElementById("detailsClose");
 const detailsPlayButton = document.getElementById("detailsPlay");
@@ -32,8 +34,91 @@ const tmdbDetailsCache = new Map();
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 const AUDIO_LANG_PREF_KEY_PREFIX = "netflix-audio-lang:movie:";
 const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
+const PROFILE_AVATAR_STYLE_PREF_KEY = "netflix-profile-avatar-style";
+const PROFILE_AVATAR_MODE_PREF_KEY = "netflix-profile-avatar-mode";
+const PROFILE_AVATAR_IMAGE_PREF_KEY = "netflix-profile-avatar-image";
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de"]);
 const supportedStreamQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
+const supportedAvatarStyles = new Set(["blue", "crimson", "emerald", "violet", "amber"]);
+const avatarStyleClassNames = Array.from(supportedAvatarStyles).map((style) => `avatar-style-${style}`);
+
+function normalizeAvatarStyle(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (supportedAvatarStyles.has(normalized)) {
+    return normalized;
+  }
+  return "blue";
+}
+
+function normalizeAvatarMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "custom" ? "custom" : "preset";
+}
+
+function sanitizeAvatarImageData(value) {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith("data:image/")) {
+    return "";
+  }
+  if (raw.length > 2_000_000) {
+    return "";
+  }
+  return raw;
+}
+
+function getStoredAvatarStylePreference() {
+  try {
+    return normalizeAvatarStyle(localStorage.getItem(PROFILE_AVATAR_STYLE_PREF_KEY));
+  } catch {
+    return "blue";
+  }
+}
+
+function getStoredAvatarModePreference() {
+  try {
+    return normalizeAvatarMode(localStorage.getItem(PROFILE_AVATAR_MODE_PREF_KEY));
+  } catch {
+    return "preset";
+  }
+}
+
+function getStoredAvatarImagePreference() {
+  try {
+    return sanitizeAvatarImageData(localStorage.getItem(PROFILE_AVATAR_IMAGE_PREF_KEY));
+  } catch {
+    return "";
+  }
+}
+
+function applyAccountAvatarStyle({
+  style = getStoredAvatarStylePreference(),
+  mode = getStoredAvatarModePreference(),
+  imageData = getStoredAvatarImagePreference(),
+} = {}) {
+  if (!accountAvatar) {
+    return;
+  }
+
+  const normalizedStyle = normalizeAvatarStyle(style);
+  const normalizedMode = normalizeAvatarMode(mode);
+  const safeImage = sanitizeAvatarImageData(imageData);
+
+  avatarStyleClassNames.forEach((className) => {
+    accountAvatar.classList.remove(className);
+  });
+  accountAvatar.classList.remove("avatar-custom-image");
+  accountAvatar.style.removeProperty("--avatar-image");
+  accountAvatar.style.removeProperty("backgroundImage");
+
+  if (normalizedMode === "custom" && safeImage) {
+    accountAvatar.classList.add("avatar-custom-image");
+    accountAvatar.style.setProperty("--avatar-image", `url("${safeImage}")`);
+    accountAvatar.style.backgroundImage = "var(--avatar-image)";
+    return;
+  }
+
+  accountAvatar.classList.add(`avatar-style-${normalizedStyle}`);
+}
 
 function getStoredAudioLangForTmdbMovie(tmdbId) {
   const normalizedTmdbId = String(tmdbId || "").trim();
@@ -565,6 +650,7 @@ function openAccountMenu() {
   }
   accountMenu.setAttribute("aria-expanded", "true");
   accountMenuToggle.setAttribute("aria-expanded", "true");
+  accountAvatarButton?.setAttribute("aria-expanded", "true");
   accountMenuPanel.hidden = false;
 }
 
@@ -574,10 +660,11 @@ function closeAccountMenu() {
   }
   accountMenu.setAttribute("aria-expanded", "false");
   accountMenuToggle.setAttribute("aria-expanded", "false");
+  accountAvatarButton?.setAttribute("aria-expanded", "false");
   accountMenuPanel.hidden = true;
 }
 
-accountMenuToggle?.addEventListener("click", (event) => {
+function handleAccountMenuToggle(event) {
   event.preventDefault();
   event.stopPropagation();
   const shouldOpen = accountMenuPanel?.hidden !== false;
@@ -586,7 +673,10 @@ accountMenuToggle?.addEventListener("click", (event) => {
     return;
   }
   closeAccountMenu();
-});
+}
+
+accountMenuToggle?.addEventListener("click", handleAccountMenuToggle);
+accountAvatarButton?.addEventListener("click", handleAccountMenuToggle);
 
 document.addEventListener("pointerdown", (event) => {
   if (!accountMenu || accountMenuPanel?.hidden !== false) {
@@ -603,6 +693,14 @@ document.addEventListener("pointerdown", (event) => {
 syncMuteUI();
 syncPlayButtonUI();
 loadPopularTitles();
+applyAccountAvatarStyle();
 closeAccountMenu();
 
 pageRoot?.focus();
+
+window.addEventListener("storage", (event) => {
+  if (event.key && event.key !== PROFILE_AVATAR_STYLE_PREF_KEY && event.key !== PROFILE_AVATAR_MODE_PREF_KEY && event.key !== PROFILE_AVATAR_IMAGE_PREF_KEY) {
+    return;
+  }
+  applyAccountAvatarStyle();
+});

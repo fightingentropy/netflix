@@ -92,6 +92,7 @@ Main behavior:
 
 - hero trailer (`intro.mp4`) with mute/play controls
 - account menu with link to `settings.html`
+- account avatar button and chevron button both toggle the same account menu
 - “Continue watching” card(s)
 - “Popular on Netflix” section populated via backend TMDB endpoints
 - details modal hydrated with `/api/tmdb/details`
@@ -109,15 +110,25 @@ Current pinned popular fetch pattern:
 
 ## 5.2 Settings Page (`settings.html`, `settings.js`)
 
-Current settings scope: **quality only**.
+Current settings scope:
 
-LocalStorage key:
+- stream quality
+- subtitle text color (default muted gray)
+- profile icon style or custom uploaded image
+
+LocalStorage keys:
 
 - `netflix-stream-quality-pref`
+- `netflix-subtitle-color-pref`
+- `netflix-profile-avatar-style`
+- `netflix-profile-avatar-mode`
+- `netflix-profile-avatar-image`
 
 Accepted values:
 
-- `auto`, `2160p`, `1080p`, `720p`
+- quality: `auto`, `2160p`, `1080p`, `720p`
+- profile icon style: `blue`, `crimson`, `emerald`, `violet`, `amber`
+- custom profile icon upload is center-cropped and resized to square before persistence
 
 ## 5.3 Player Page (`player.html`, `player.js`)
 
@@ -176,6 +187,7 @@ All API routes are implemented in `server.js`.
 - `GET /api/resolve/movie?tmdbId=<id>&audioLang=<lang>&quality=<q>&subtitleLang=<lang>`
   - resolves a playable source via Real-Debrid flow
   - includes selected track indices + probe tracks + fallback URLs
+  - enriches subtitle tracks with external provider options (best-effort)
   - prewarms subtitle VTT extraction for selected subtitle stream
 
 ## 6.2 Title Preference APIs
@@ -197,6 +209,8 @@ All API routes are implemented in `server.js`.
   - HLS segment serving
 - `GET /api/subtitles.vtt?input=<url|path>&subtitleStream=<idx>`
   - subtitle extraction to VTT + caching
+- `GET /api/subtitles.external.vtt?download=<providerUrl>`
+  - fetches provider subtitle payload (`.srt`/`.vtt`/`.gz`) and normalizes to VTT + caching
 
 ## 6.4 Ops/Debug APIs
 
@@ -264,7 +278,7 @@ Parsed track model includes:
 
 - video metadata (start time, frame rate, B-frames, codec)
 - audio tracks (stream index, language, title, codec, channels, default)
-- subtitle tracks (stream index, language, codec, text-based flag, generated VTT URL)
+- subtitle tracks (stream index, language, codec, text-based flag, generated VTT URL, optional `isExternal` flag/provider metadata)
 
 Subtitle text codec set considered VTT-convertible:
 
@@ -280,6 +294,13 @@ Selection rules:
   - if preference is empty/off -> none
   - else matching text-based language
   - else default text-based subtitle
+
+External subtitle enrichment:
+
+- resolver augments subtitle track lists with OpenSubtitles results (via movie IMDb id)
+- when external fallback is used, only the top-ranked candidate is kept (single best match)
+- external tracks are exposed as VTT URLs under `/api/subtitles.external.vtt?...`
+- external tracks are shown with clean language labels (for example `English`) and are not auto-selected by server subtitle preference logic
 
 ## 10. Playback Adaptation and Transcoding
 
@@ -345,6 +366,8 @@ Effective mode can differ from requested env mode and is visible via:
 Player subtitle rendering path:
 
 - external VTT tracks attached in player (`<track kind="subtitles">`)
+- cue color styled in player via local preference (`netflix-subtitle-color-pref`, muted gray default)
+- cue lines are auto-positioned in the middle of the lower letterbox matte when black bars exist; otherwise fallback is near-bottom (`line = -2`)
 - selected track is forced to `showing` via `video.textTracks` control
 
 Server subtitle extraction path (`/api/subtitles.vtt`):
@@ -355,6 +378,14 @@ Server subtitle extraction path (`/api/subtitles.vtt`):
 4. fallback map strategy (`0:<streamIndex>` then `0:s:<ordinal>`)
 5. write cache if non-empty
 6. if extraction fails/empty -> returns minimal empty `WEBVTT` response
+
+Server external subtitle path (`/api/subtitles.external.vtt`):
+
+1. resolver fetches candidate subtitle files from OpenSubtitles REST (best-effort)
+2. API validates provider download URL host allowlist
+3. on request, server fetches subtitle payload and decompresses `.gz` when needed
+4. subtitle text is normalized to WebVTT (or passed through if already VTT)
+5. VTT response is cached in `.hls-cache` with in-flight dedupe
 
 Prewarm behavior:
 
@@ -409,9 +440,12 @@ Major in-memory maps:
 - `movieQuickStartCache`
 - `tmdbResponseCache`
 - `rdTorrentLookupCache`
+- `externalSubtitleLookupCache`
 - `inFlightMovieResolves`
 - `inFlightMediaProbeRequests`
 - `inFlightSubtitleVttBuilds`
+- `inFlightExternalSubtitleLookups`
+- `inFlightExternalSubtitleBuilds`
 - `hlsTranscodeJobs`
 
 Key TTL / limits (current constants):
@@ -420,6 +454,7 @@ Key TTL / limits (current constants):
 - ephemeral resolved stream TTL: `12h`, revalidate every `90s`
 - movie quick-start cache TTL: `1h`
 - RD lookup cache TTL: `2m`
+- external subtitle lookup cache TTL: `30m`
 - TMDB cache TTLs:
   - default: `6h`
   - popular list: `30m`
@@ -431,6 +466,7 @@ Key TTL / limits (current constants):
 - HLS segment duration: `6s`
 - HLS segment stale: `6h`
 - HLS transcode idle prune: `8m`
+- external subtitle VTT cache stale: `12h`
 
 ## 14. Preference Model
 
@@ -438,6 +474,9 @@ Currently persisted:
 
 - quality preference: localStorage (`netflix-stream-quality-pref`)
 - audio language preference: localStorage per movie (`netflix-audio-lang:movie:<tmdbId>`)
+- subtitle text color preference: localStorage (`netflix-subtitle-color-pref`, default `#b8bcc3`)
+- profile icon style preference: localStorage (`netflix-profile-avatar-style`, default `blue`)
+- profile icon mode/image: localStorage (`netflix-profile-avatar-mode`, `netflix-profile-avatar-image`)
 - subtitle preference per title: SQLite (`title_track_preferences`) via `/api/title/preferences`
 
 Currently not actively used by player:
@@ -465,6 +504,7 @@ Server-side:
 
 - Subtitles UI is primary in popover; audio selection UI is hidden.
 - HLS path does not currently embed or emit subtitle segments; subtitle rendering is via external VTT track path.
+- external subtitle sourcing is movie-focused (IMDb-id based) and currently backed by OpenSubtitles REST.
 - Client-side playback session syncing is disabled (`canSyncPlaybackSession()` returns false), even if server session support is enabled.
 - `dev:vite` is not equivalent to the Bun API server runtime.
 
@@ -481,7 +521,7 @@ If subtitles do not appear:
 
 1. ensure subtitle track is selected in player
 2. verify subtitle stream exists in `/api/resolve/movie` response
-3. request `/api/subtitles.vtt?...` directly and confirm non-empty VTT
+3. request selected subtitle URL directly (`/api/subtitles.vtt?...` or `/api/subtitles.external.vtt?...`) and confirm non-empty VTT
 4. allow first extraction/prewarm window for uncached streams
 
 If A/V sync feels off:

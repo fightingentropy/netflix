@@ -55,6 +55,66 @@
           <small>Lower bitrate for smoother playback</small>
         </label>
 
+        <section class="subtitle-color-section" aria-labelledby="subtitleColorTitle">
+          <h2 id="subtitleColorTitle" class="settings-section-title">Subtitle Color</h2>
+          <p class="subtitle-color-help">Default is a muted gray so captions are easier on your eyes.</p>
+          <div class="subtitle-color-controls">
+            <label class="subtitle-color-picker-label" for="subtitleColorInput">Color</label>
+            <input id="subtitleColorInput" name="subtitleColor" type="color" value="#b8bcc3" />
+            <button id="subtitleColorReset" class="subtitle-color-reset-btn" type="button">Reset</button>
+          </div>
+          <p id="subtitleColorPreview" class="subtitle-color-preview">Sample subtitle preview text.</p>
+        </section>
+
+        <section class="avatar-style-section" aria-labelledby="avatarStyleTitle">
+          <h2 id="avatarStyleTitle" class="settings-section-title">Profile Icon</h2>
+          <p class="avatar-style-help">Choose the icon style used in the top-right account menu.</p>
+
+          <div class="avatar-style-preview-wrap">
+            <span class="avatar-style-preview-label">Preview</span>
+            <div id="avatarStylePreview" class="avatar-style-preview avatar-style-blue" aria-hidden="true"></div>
+          </div>
+
+          <div class="avatar-style-options" role="radiogroup" aria-label="Profile icon style">
+            <label class="avatar-style-option">
+              <input type="radio" name="avatarStyle" value="blue" />
+              <span class="avatar-style-swatch avatar-style-blue" aria-hidden="true"></span>
+              <span>Blue</span>
+            </label>
+            <label class="avatar-style-option">
+              <input type="radio" name="avatarStyle" value="crimson" />
+              <span class="avatar-style-swatch avatar-style-crimson" aria-hidden="true"></span>
+              <span>Crimson</span>
+            </label>
+            <label class="avatar-style-option">
+              <input type="radio" name="avatarStyle" value="emerald" />
+              <span class="avatar-style-swatch avatar-style-emerald" aria-hidden="true"></span>
+              <span>Emerald</span>
+            </label>
+            <label class="avatar-style-option">
+              <input type="radio" name="avatarStyle" value="violet" />
+              <span class="avatar-style-swatch avatar-style-violet" aria-hidden="true"></span>
+              <span>Violet</span>
+            </label>
+            <label class="avatar-style-option">
+              <input type="radio" name="avatarStyle" value="amber" />
+              <span class="avatar-style-swatch avatar-style-amber" aria-hidden="true"></span>
+              <span>Amber</span>
+            </label>
+            <label class="avatar-style-option avatar-style-option--custom">
+              <input type="radio" name="avatarStyle" value="custom" />
+              <span id="avatarCustomThumb" class="avatar-style-swatch avatar-style-custom-thumb" aria-hidden="true"></span>
+              <span>Custom image</span>
+            </label>
+          </div>
+
+          <div class="avatar-upload-controls">
+            <label class="avatar-upload-btn" for="avatarImageInput">Choose from computer</label>
+            <input id="avatarImageInput" type="file" accept="image/*" />
+            <span id="avatarUploadHint" class="avatar-upload-hint">Auto center-crop + resize to square.</span>
+          </div>
+        </section>
+
         <div class="settings-actions">
           <button id="saveQuality" class="save-btn" type="submit">Save Preference</button>
           <p id="saveStatus" class="save-status" role="status" aria-live="polite"></p>

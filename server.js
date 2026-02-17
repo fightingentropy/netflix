@@ -1,5 +1,6 @@
 import { join, normalize } from "node:path";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { gunzipSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 
 const ROOT_DIR = process.cwd();
@@ -10,6 +11,8 @@ const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 const REAL_DEBRID_API_BASE = "https://api.real-debrid.com/rest/1.0";
 const TORRENTIO_BASE_URL = process.env.TORRENTIO_BASE_URL || "https://torrentio.strem.fun";
+const OPENSUBTITLES_REST_BASE = process.env.OPENSUBTITLES_REST_BASE || "https://rest.opensubtitles.org";
+const OPENSUBTITLES_USER_AGENT = process.env.OPENSUBTITLES_USER_AGENT || "TemporaryUserAgent";
 
 const TMDB_API_KEY = (process.env.TMDB_API_KEY || "").trim();
 const REAL_DEBRID_TOKEN = (process.env.REAL_DEBRID_TOKEN || "").trim();
@@ -64,13 +67,20 @@ const HLS_TRANSCODE_IDLE_MS = 8 * 60 * 1000;
 const HLS_SEGMENT_WAIT_TIMEOUT_MS = 30000;
 const HLS_SEGMENT_WAIT_POLL_MS = 180;
 const SUBTITLE_EXTRACT_TIMEOUT_MS = 3 * 60 * 1000;
+const EXTERNAL_SUBTITLE_LOOKUP_TTL_MS = 30 * 60 * 1000;
+const EXTERNAL_SUBTITLE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const EXTERNAL_SUBTITLE_MAX_TRACKS = 1;
+const EXTERNAL_SUBTITLE_STREAM_INDEX_BASE = 2_000_000;
 const HLS_HWACCEL_MODE = normalizeHlsHwaccelMode(process.env.HLS_HWACCEL || "none");
 const AUTO_AUDIO_SYNC_ENABLED = normalizeAutoAudioSyncEnabled(process.env.AUTO_AUDIO_SYNC || "0");
 const PLAYBACK_SESSIONS_ENABLED = normalizeAutoAudioSyncEnabled(process.env.PLAYBACK_SESSIONS || "0");
 const inFlightMovieResolves = new Map();
 const inFlightMediaProbeRequests = new Map();
 const inFlightSubtitleVttBuilds = new Map();
+const inFlightExternalSubtitleLookups = new Map();
+const inFlightExternalSubtitleBuilds = new Map();
 const hlsTranscodeJobs = new Map();
+const externalSubtitleLookupCache = new Map();
 const CACHE_SWEEP_INTERVAL_MS = 60 * 1000;
 const SERVER_STARTED_AT = Date.now();
 const FFMPEG_CAPABILITY_REFRESH_MS = 5 * 60 * 1000;
@@ -121,6 +131,23 @@ const AUDIO_LANGUAGE_TOKENS = {
   de: ["german", " deutsch", " ger ", "deu "],
   it: ["italian", " italiano", " ita "],
   pt: ["portuguese", " portugues", " por ", "pt-br", "brazilian"],
+};
+const ISO2_TO_OPENSUBTITLES_LANG = {
+  en: "eng",
+  fr: "fre",
+  es: "spa",
+  de: "ger",
+  it: "ita",
+  pt: "por",
+  ja: "jpn",
+  ko: "kor",
+  zh: "chi",
+  nl: "dut",
+  ro: "rum",
+  pl: "pol",
+  tr: "tur",
+  ru: "rus",
+  ar: "ara",
 };
 const STREAM_QUALITY_TARGETS = {
   auto: 0,
@@ -547,6 +574,381 @@ function normalizeSubtitlePreference(value) {
     return "off";
   }
   return normalizeIsoLanguage(raw);
+}
+
+function normalizeImdbIdForLookup(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) {
+    return "";
+  }
+  const digits = raw.replace(/^tt/, "").replace(/[^0-9]/g, "");
+  return digits;
+}
+
+function toOpenSubtitlesLanguageCode(value) {
+  const normalized = normalizeIsoLanguage(value);
+  if (!normalized) {
+    return "";
+  }
+  return ISO2_TO_OPENSUBTITLES_LANG[normalized] || "";
+}
+
+function buildExternalSubtitleLookupLanguages(preferredSubtitleLang = "") {
+  const preferred = normalizeSubtitlePreference(preferredSubtitleLang);
+  const fallbackOrder = [];
+  if (preferred && preferred !== "off") {
+    fallbackOrder.push(preferred);
+  }
+  fallbackOrder.push("en");
+
+  const uniqueIso = [...new Set(fallbackOrder)];
+  const normalized = uniqueIso
+    .map((iso2) => ({
+      iso2,
+      openSubtitlesCode: toOpenSubtitlesLanguageCode(iso2),
+    }))
+    .filter((entry) => entry.openSubtitlesCode);
+  return normalized;
+}
+
+function buildExternalSubtitleLookupKey(metadata, preferredSubtitleLang = "") {
+  const imdbDigits = normalizeImdbIdForLookup(metadata?.imdbId || "");
+  if (!imdbDigits) {
+    return "";
+  }
+  const preferred = normalizeSubtitlePreference(preferredSubtitleLang);
+  return `${imdbDigits}|${preferred || "auto"}|single-v1`;
+}
+
+function isExternalSubtitleTrack(track) {
+  return Boolean(
+    track?.isExternal
+    || String(track?.vttUrl || "").includes("/api/subtitles.external.vtt")
+    || Number(track?.streamIndex) >= EXTERNAL_SUBTITLE_STREAM_INDEX_BASE
+  );
+}
+
+function getSubtitleLanguageDisplayName(value) {
+  const normalized = normalizeIsoLanguage(value);
+  const nameMap = {
+    en: "English",
+    fr: "French",
+    es: "Spanish",
+    de: "German",
+    it: "Italian",
+    pt: "Portuguese",
+    ja: "Japanese",
+    ko: "Korean",
+    zh: "Chinese",
+    nl: "Dutch",
+    ro: "Romanian",
+    pl: "Polish",
+    tr: "Turkish",
+    ru: "Russian",
+    ar: "Arabic",
+  };
+  return nameMap[normalized] || "English";
+}
+
+function normalizeExternalSubtitleDownloadUrl(value) {
+  const raw = String(value || "").replace(/\\\//g, "/").trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return "";
+    }
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function isAllowedExternalSubtitleDownloadUrl(downloadUrl) {
+  try {
+    const parsed = new URL(downloadUrl);
+    const hostname = String(parsed.hostname || "").toLowerCase();
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+    return hostname === "dl.opensubtitles.org" || hostname.endsWith(".opensubtitles.org");
+  } catch {
+    return false;
+  }
+}
+
+function buildExternalSubtitleVttUrl(downloadUrl) {
+  const query = new URLSearchParams({ download: downloadUrl });
+  return `/api/subtitles.external.vtt?${query.toString()}`;
+}
+
+function buildExternalSubtitleCachePath(downloadUrl) {
+  const safeUrl = String(downloadUrl || "").trim();
+  return join(HLS_CACHE_DIR, `${hashStableString(`external-subtitle:${safeUrl}`)}.vtt`);
+}
+
+function decodeSubtitleBytes(rawBytes) {
+  const bytes = rawBytes instanceof Uint8Array ? rawBytes : new Uint8Array(rawBytes || 0);
+  if (!bytes.length) {
+    return "";
+  }
+
+  const decodeAttempts = ["utf-8", "windows-1252", "iso-8859-1"];
+  for (const encoding of decodeAttempts) {
+    try {
+      const decoded = new TextDecoder(encoding).decode(bytes);
+      if (decoded) {
+        return decoded;
+      }
+    } catch {
+      // Try next decoder.
+    }
+  }
+
+  return "";
+}
+
+function normalizeSubtitleTextToVtt(rawText) {
+  const normalized = String(rawText || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+
+  if (!normalized) {
+    return "WEBVTT\n\n";
+  }
+
+  if (/^WEBVTT\b/i.test(normalized)) {
+    return `${normalized}\n`;
+  }
+
+  const vttBody = normalized.replace(
+    /(\d{2}:\d{2}(?::\d{2})?),(\d{3})/g,
+    "$1.$2",
+  );
+  return `WEBVTT\n\n${vttBody}\n`;
+}
+
+function buildExternalSubtitleLabel(entry) {
+  return getSubtitleLanguageDisplayName(entry?.ISO639 || entry?.SubLanguageID || "en");
+}
+
+async function fetchOpenSubtitlesRows(imdbDigits, language) {
+  const searchUrl = `${OPENSUBTITLES_REST_BASE}/search/imdbid-${encodeURIComponent(imdbDigits)}/sublanguageid-${encodeURIComponent(language)}`;
+  try {
+    const payload = await requestJson(searchUrl, {
+      headers: {
+        "User-Agent": OPENSUBTITLES_USER_AGENT,
+      },
+    }, 12000);
+    return Array.isArray(payload) ? payload : [];
+  } catch {
+    return [];
+  }
+}
+
+async function fetchExternalSubtitleTracksForMovie(metadata, preferredSubtitleLang = "") {
+  const imdbDigits = normalizeImdbIdForLookup(metadata?.imdbId || "");
+  if (!imdbDigits) {
+    return [];
+  }
+
+  const lookupKey = buildExternalSubtitleLookupKey(metadata, preferredSubtitleLang);
+  if (!lookupKey) {
+    return [];
+  }
+
+  const now = Date.now();
+  const cached = externalSubtitleLookupCache.get(lookupKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const inFlight = inFlightExternalSubtitleLookups.get(lookupKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const lookupTask = (async () => {
+    const requestedLanguages = buildExternalSubtitleLookupLanguages(preferredSubtitleLang);
+    if (!requestedLanguages.length) {
+      return [];
+    }
+
+    const allRows = [];
+    for (const language of requestedLanguages) {
+      const rows = await fetchOpenSubtitlesRows(imdbDigits, language.openSubtitlesCode);
+      rows.forEach((row) => {
+        allRows.push({
+          ...row,
+          requestedIso2: language.iso2,
+        });
+      });
+    }
+
+    const dedupedByFile = new Map();
+    allRows.forEach((entry) => {
+      const downloadUrl = normalizeExternalSubtitleDownloadUrl(entry?.SubDownloadLink || entry?.ZipDownloadLink || "");
+      if (!downloadUrl || !isAllowedExternalSubtitleDownloadUrl(downloadUrl)) {
+        return;
+      }
+
+      const providerId = String(entry?.IDSubtitleFile || entry?.IDSubtitle || "").trim();
+      const dedupeKey = providerId || downloadUrl;
+      if (!dedupeKey) {
+        return;
+      }
+
+      const downloads = Number(entry?.SubDownloadsCnt || 0) || 0;
+      const rating = Number(entry?.SubRating || 0) || 0;
+      const language = normalizeIsoLanguage(entry?.ISO639 || entry?.SubLanguageID || entry?.requestedIso2 || "");
+      const normalizedEntry = {
+        providerId,
+        provider: "opensubtitles",
+        providerDownloadUrl: downloadUrl,
+        downloads,
+        rating,
+        language,
+        label: buildExternalSubtitleLabel(entry),
+      };
+
+      const existing = dedupedByFile.get(dedupeKey);
+      if (!existing || normalizedEntry.downloads > existing.downloads) {
+        dedupedByFile.set(dedupeKey, normalizedEntry);
+      }
+    });
+
+    const preferredIso = normalizeSubtitlePreference(preferredSubtitleLang);
+    const sorted = Array.from(dedupedByFile.values())
+      .sort((left, right) => {
+        const leftPreferred = preferredIso && left.language === preferredIso ? 1 : 0;
+        const rightPreferred = preferredIso && right.language === preferredIso ? 1 : 0;
+        if (leftPreferred !== rightPreferred) {
+          return rightPreferred - leftPreferred;
+        }
+        if (left.downloads !== right.downloads) {
+          return right.downloads - left.downloads;
+        }
+        return right.rating - left.rating;
+      })
+      .slice(0, EXTERNAL_SUBTITLE_MAX_TRACKS)
+      .map((entry) => ({
+        streamIndex: -1,
+        language: entry.language || "en",
+        title: "",
+        codec: "webvtt",
+        isDefault: false,
+        isTextBased: true,
+        isExternal: true,
+        provider: entry.provider,
+        providerId: entry.providerId,
+        label: getSubtitleLanguageDisplayName(entry.language || "en"),
+        vttUrl: buildExternalSubtitleVttUrl(entry.providerDownloadUrl),
+      }));
+
+    externalSubtitleLookupCache.set(lookupKey, {
+      value: sorted,
+      expiresAt: Date.now() + EXTERNAL_SUBTITLE_LOOKUP_TTL_MS,
+    });
+    trimCacheEntries(externalSubtitleLookupCache, 500);
+    return sorted;
+  })()
+    .catch(() => [])
+    .finally(() => {
+      inFlightExternalSubtitleLookups.delete(lookupKey);
+    });
+
+  inFlightExternalSubtitleLookups.set(lookupKey, lookupTask);
+  return lookupTask;
+}
+
+function mergeSubtitleTracksWithExternal(baseSubtitleTracks, externalSubtitleTracks) {
+  const merged = Array.isArray(baseSubtitleTracks)
+    ? baseSubtitleTracks
+      .filter((track) => !isExternalSubtitleTrack(track))
+      .map((track) => ({
+      ...track,
+      isExternal: false,
+    }))
+    : [];
+  if (!Array.isArray(externalSubtitleTracks) || externalSubtitleTracks.length === 0) {
+    return merged;
+  }
+
+  const usedIndices = new Set(
+    merged
+      .map((track) => Number(track?.streamIndex))
+      .filter((value) => Number.isInteger(value) && value >= 0),
+  );
+  const existingExternalKeys = new Set(
+    merged
+      .filter((track) => isExternalSubtitleTrack(track))
+      .map((track) => `${track?.provider || "external"}|${track?.providerId || ""}|${track?.vttUrl || ""}`),
+  );
+  let nextExternalStreamIndex = EXTERNAL_SUBTITLE_STREAM_INDEX_BASE;
+
+  externalSubtitleTracks.forEach((track) => {
+    const externalKey = `${track?.provider || "external"}|${track?.providerId || ""}|${track?.vttUrl || ""}`;
+    if (existingExternalKeys.has(externalKey)) {
+      return;
+    }
+
+    while (usedIndices.has(nextExternalStreamIndex)) {
+      nextExternalStreamIndex += 1;
+    }
+    merged.push({
+      ...track,
+      streamIndex: nextExternalStreamIndex,
+      isExternal: true,
+    });
+    usedIndices.add(nextExternalStreamIndex);
+    existingExternalKeys.add(externalKey);
+    nextExternalStreamIndex += 1;
+  });
+
+  return merged;
+}
+
+async function augmentTracksWithExternalSubtitles(tracks, metadata, preferredSubtitleLang = "") {
+  const safeTracks = tracks && typeof tracks === "object"
+    ? {
+      ...tracks,
+      subtitleTracks: Array.isArray(tracks.subtitleTracks) ? tracks.subtitleTracks : [],
+    }
+    : {
+      durationSeconds: 0,
+      audioTracks: [],
+      subtitleTracks: [],
+    };
+
+  if (!metadata?.imdbId) {
+    return safeTracks;
+  }
+  const hasInternalTextSubtitles = safeTracks.subtitleTracks.some((track) => (
+    track
+    && track.isTextBased
+    && !isExternalSubtitleTrack(track)
+    && String(track.vttUrl || "").trim()
+  ));
+  if (hasInternalTextSubtitles) {
+    return safeTracks;
+  }
+  try {
+    const externalTracks = await fetchExternalSubtitleTracksForMovie(metadata, preferredSubtitleLang);
+    if (!externalTracks.length) {
+      return safeTracks;
+    }
+    return {
+      ...safeTracks,
+      subtitleTracks: mergeSubtitleTracksWithExternal(safeTracks.subtitleTracks, externalTracks),
+    };
+  } catch {
+    return safeTracks;
+  }
 }
 
 function normalizeAudioSyncMs(value) {
@@ -1046,6 +1448,7 @@ function parseProbeTracksFromFfprobePayload(payload, sourceInput) {
         codec,
         isDefault,
         isTextBased: textCodecSet.has(codec),
+        isExternal: false,
         label: title || `${(language || "und").toUpperCase()} subtitles`,
         vttUrl: textCodecSet.has(codec)
           ? `/api/subtitles.vtt?${new URLSearchParams({
@@ -1142,12 +1545,20 @@ function chooseSubtitleTrackFromProbe(probe, preferredSubtitleLang) {
     return null;
   }
 
-  const match = subtitles.find((track) => track.language === normalized && track.isTextBased);
+  const match = subtitles.find((track) => (
+    track.language === normalized
+    && track.isTextBased
+    && !isExternalSubtitleTrack(track)
+  ));
   if (match) {
     return match;
   }
 
-  return subtitles.find((track) => track.isDefault && track.isTextBased) || null;
+  return subtitles.find((track) => (
+    track.isDefault
+    && track.isTextBased
+    && !isExternalSubtitleTrack(track)
+  )) || null;
 }
 
 function getPersistedTitleTrackPreference(tmdbId) {
@@ -1753,6 +2164,100 @@ async function hasFreshSubtitleCacheFile(sourceInput, subtitleStreamIndex) {
   }
 }
 
+function buildExternalSubtitleCacheKey(downloadUrl) {
+  return String(downloadUrl || "").trim();
+}
+
+async function hasFreshExternalSubtitleCacheFile(downloadUrl) {
+  const subtitlePath = buildExternalSubtitleCachePath(downloadUrl);
+  try {
+    const subtitleStat = await stat(subtitlePath);
+    return subtitleStat.isFile() && (Date.now() - subtitleStat.mtimeMs) < EXTERNAL_SUBTITLE_CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+function isLikelyGzipPayload(downloadUrl, bytes, responseHeaders) {
+  if (bytes?.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    return true;
+  }
+
+  const contentEncoding = String(responseHeaders?.get?.("content-encoding") || "").toLowerCase();
+  if (contentEncoding.includes("gzip")) {
+    return true;
+  }
+
+  const contentType = String(responseHeaders?.get?.("content-type") || "").toLowerCase();
+  if (contentType.includes("gzip")) {
+    return true;
+  }
+
+  return String(downloadUrl || "").toLowerCase().endsWith(".gz");
+}
+
+async function fetchExternalSubtitlePayload(downloadUrl) {
+  const safeUrl = normalizeExternalSubtitleDownloadUrl(downloadUrl);
+  if (!safeUrl || !isAllowedExternalSubtitleDownloadUrl(safeUrl)) {
+    throw new Error("Unsupported external subtitle URL.");
+  }
+
+  const response = await fetch(safeUrl, {
+    headers: {
+      "User-Agent": OPENSUBTITLES_USER_AGENT,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`External subtitle request failed (${response.status}).`);
+  }
+
+  const rawBytes = new Uint8Array(await response.arrayBuffer());
+  if (!rawBytes.length) {
+    return "";
+  }
+
+  let textBytes = rawBytes;
+  if (isLikelyGzipPayload(safeUrl, rawBytes, response.headers)) {
+    try {
+      textBytes = new Uint8Array(gunzipSync(Buffer.from(rawBytes)));
+    } catch {
+      textBytes = rawBytes;
+    }
+  }
+
+  const subtitleText = decodeSubtitleBytes(textBytes);
+  return normalizeSubtitleTextToVtt(subtitleText);
+}
+
+function queueExternalSubtitleVttBuild(downloadUrl) {
+  const safeUrl = normalizeExternalSubtitleDownloadUrl(downloadUrl);
+  if (!safeUrl || !isAllowedExternalSubtitleDownloadUrl(safeUrl)) {
+    return Promise.resolve("WEBVTT\n\n");
+  }
+
+  const cacheKey = buildExternalSubtitleCacheKey(safeUrl);
+  const inFlight = inFlightExternalSubtitleBuilds.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const buildTask = (async () => {
+    await ensureHlsCacheDirectory();
+    const subtitleText = await fetchExternalSubtitlePayload(safeUrl);
+    if (String(subtitleText || "").trim()) {
+      await Bun.write(buildExternalSubtitleCachePath(safeUrl), subtitleText);
+    }
+    return subtitleText;
+  })()
+    .catch(() => "WEBVTT\n\n")
+    .finally(() => {
+      inFlightExternalSubtitleBuilds.delete(cacheKey);
+    });
+
+  inFlightExternalSubtitleBuilds.set(cacheKey, buildTask);
+  return buildTask;
+}
+
 async function extractSubtitleVttText(sourceInput, subtitleStreamIndex) {
   const safeStreamIndex = Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0
     ? Math.floor(subtitleStreamIndex)
@@ -1803,6 +2308,32 @@ async function extractSubtitleVttText(sourceInput, subtitleStreamIndex) {
   }
 
   return subtitleText;
+}
+
+async function createExternalSubtitleVttResponse(downloadUrl) {
+  const safeUrl = normalizeExternalSubtitleDownloadUrl(downloadUrl);
+  if (!safeUrl || !isAllowedExternalSubtitleDownloadUrl(safeUrl)) {
+    throw new Error("Missing or invalid external subtitle URL.");
+  }
+
+  if (await hasFreshExternalSubtitleCacheFile(safeUrl)) {
+    return new Response(Bun.file(buildExternalSubtitleCachePath(safeUrl)), {
+      status: 200,
+      headers: {
+        "Content-Type": "text/vtt; charset=utf-8",
+        "Cache-Control": "public, max-age=300",
+      },
+    });
+  }
+
+  const subtitleText = await queueExternalSubtitleVttBuild(safeUrl);
+  return new Response(subtitleText || "WEBVTT\n\n", {
+    status: 200,
+    headers: {
+      "Content-Type": "text/vtt; charset=utf-8",
+      "Cache-Control": "public, max-age=120",
+    },
+  });
 }
 
 function queueSubtitleVttBuild(sourceInput, subtitleStreamIndex) {
@@ -2850,6 +3381,9 @@ function cloneResolvedMovieResult(value) {
             codec: String(track?.codec || ""),
             isDefault: Boolean(track?.isDefault),
             isTextBased: Boolean(track?.isTextBased),
+            isExternal: Boolean(track?.isExternal),
+            provider: String(track?.provider || ""),
+            providerId: String(track?.providerId || ""),
             label: String(track?.label || ""),
             vttUrl: String(track?.vttUrl || ""),
           }))
@@ -3554,10 +4088,12 @@ function sweepCaches() {
   pruneExpiredEntries(movieQuickStartCache);
   pruneExpiredEntries(resolvedStreamCache);
   pruneExpiredEntries(rdTorrentLookupCache);
+  pruneExpiredEntries(externalSubtitleLookupCache);
   trimCacheEntries(tmdbResponseCache, TMDB_RESPONSE_CACHE_MAX_ENTRIES);
   trimCacheEntries(movieQuickStartCache, MOVIE_QUICK_START_CACHE_MAX_ENTRIES);
   trimCacheEntries(resolvedStreamCache, RESOLVED_STREAM_CACHE_MAX_ENTRIES);
   trimCacheEntries(rdTorrentLookupCache, RD_TORRENT_LOOKUP_CACHE_MAX_ENTRIES);
+  trimCacheEntries(externalSubtitleLookupCache, 500);
   prunePersistentCaches();
   pruneIdleHlsTranscodeJobs();
   void pruneHlsCacheFiles();
@@ -3597,6 +4133,11 @@ function getCacheDebugStats() {
         size: rdTorrentLookupCache.size,
         ttlMs: RD_TORRENT_LOOKUP_CACHE_TTL_MS,
         maxEntries: RD_TORRENT_LOOKUP_CACHE_MAX_ENTRIES,
+      },
+      externalSubtitleLookup: {
+        size: externalSubtitleLookupCache.size,
+        ttlMs: EXTERNAL_SUBTITLE_LOOKUP_TTL_MS,
+        maxEntries: 500,
       },
       playbackSession: {
         validateIntervalMs: PLAYBACK_SESSION_VALIDATE_INTERVAL_MS,
@@ -4652,6 +5193,7 @@ async function getReusablePlaybackSession(tmdbMovieId, context = {}) {
   } catch {
     // Probe data is optional for session reuse.
   }
+  tracks = await augmentTracksWithExternalSubtitles(tracks, session.metadata || {}, preferredSubtitleLang);
 
   const normalizedPlayable = normalizeResolvedSourceForSoftwareDecode(
     {
@@ -4686,13 +5228,30 @@ async function getReusablePlaybackSession(tmdbMovieId, context = {}) {
   };
 }
 
+async function withExternalSubtitleTracksOnResolvedMovie(result, preferredSubtitleLang = "") {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+
+  const cloned = cloneResolvedMovieResult(result) || {
+    ...result,
+    tracks: result?.tracks || {},
+  };
+  const metadata = cloned?.metadata && typeof cloned.metadata === "object" ? cloned.metadata : {};
+  const tracks = cloned?.tracks && typeof cloned.tracks === "object" ? cloned.tracks : {};
+  cloned.tracks = await augmentTracksWithExternalSubtitles(tracks, metadata, preferredSubtitleLang);
+  return cloned;
+}
+
 async function resolveMovieWithDedup(tmdbMovieId, context = {}) {
   const effectivePreferredAudioLang = resolveEffectivePreferredAudioLang(tmdbMovieId, context.preferredAudioLang);
   const effectivePreferredQuality = normalizePreferredStreamQuality(context.preferredQuality);
+  const effectivePreferredSubtitleLang = normalizeSubtitlePreference(context.preferredSubtitleLang || "");
   const effectiveContext = {
     ...context,
     preferredAudioLang: effectivePreferredAudioLang,
     preferredQuality: effectivePreferredQuality,
+    preferredSubtitleLang: effectivePreferredSubtitleLang,
   };
   const dedupKey = buildMovieResolveKey(tmdbMovieId, effectivePreferredAudioLang, effectivePreferredQuality);
   const reusableSession = await getReusablePlaybackSession(tmdbMovieId, effectiveContext);
@@ -4708,12 +5267,14 @@ async function resolveMovieWithDedup(tmdbMovieId, context = {}) {
 
   const cached = getCachedMovieQuickStart(dedupKey);
   if (cached) {
+    const hydratedCached = await withExternalSubtitleTracksOnResolvedMovie(cached, effectivePreferredSubtitleLang);
+    setCachedMovieQuickStart(dedupKey, hydratedCached);
     return attachPlaybackSessionToResolvedMovie(
-      cached,
+      hydratedCached,
       tmdbMovieId,
       effectivePreferredAudioLang,
       effectivePreferredQuality,
-    ) || cached;
+    ) || hydratedCached;
   }
 
   const existing = inFlightMovieResolves.get(dedupKey);
@@ -5019,6 +5580,7 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
       } catch {
         // Track probing is optional; continue playback with best-effort defaults.
       }
+      tracks = await augmentTracksWithExternalSubtitles(tracks, metadata, preferredSubtitleLang);
 
       const normalizedPlayable = normalizeResolvedSourceForSoftwareDecode(
         {
@@ -5061,7 +5623,10 @@ async function handleApi(url, request) {
       movieQuickStartCache.clear();
       resolvedStreamCache.clear();
       rdTorrentLookupCache.clear();
+      externalSubtitleLookupCache.clear();
       inFlightMovieResolves.clear();
+      inFlightExternalSubtitleLookups.clear();
+      inFlightExternalSubtitleBuilds.clear();
       clearPersistentCaches();
     }
     sweepCaches();
@@ -5318,6 +5883,14 @@ async function handleApi(url, request) {
       return json({ error: "Missing input query parameter." }, 400);
     }
     return createSubtitleVttResponse(input, subtitleStreamIndex);
+  }
+
+  if (url.pathname === "/api/subtitles.external.vtt") {
+    const downloadUrl = (url.searchParams.get("download") || "").trim();
+    if (!downloadUrl) {
+      return json({ error: "Missing download query parameter." }, 400);
+    }
+    return createExternalSubtitleVttResponse(downloadUrl);
   }
 
   if (url.pathname === "/api/remux") {
