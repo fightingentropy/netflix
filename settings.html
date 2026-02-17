@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Playback Settings</title>
+  <link rel="icon" type="image/png" href="logo.png" />
+  <link rel="apple-touch-icon" href="logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="settings.css" />
+</head>
+<body>
+  <main class="settings-page">
+    <header class="settings-header">
+      <a class="settings-logo-link" href="index.html" aria-label="Back to home">
+        <img src="logo.png" alt="Netflix" class="settings-logo" />
+      </a>
+      <a class="settings-back-link" href="index.html">Back to Browse</a>
+    </header>
+
+    <section class="settings-card" aria-labelledby="settingsTitle">
+      <div class="settings-headline">
+        <p class="settings-kicker">Profile Settings</p>
+        <h1 id="settingsTitle">Playback Settings</h1>
+        <p class="settings-description">
+          Tune stream quality and manual audio sync used when playback is routed through the local remux pipeline.
+          Increase audio delay if voices feel slightly earlier than the video.
+        </p>
+      </div>
+
+      <form id="qualityForm" class="quality-form">
+        <h2 class="settings-section-title">Quality Filter</h2>
+        <label class="quality-option">
+          <input type="radio" name="quality" value="auto" />
+          <span class="quality-option-label">Auto (Best Available)</span>
+          <small>Always pick the highest ranked source</small>
+        </label>
+
+        <label class="quality-option">
+          <input type="radio" name="quality" value="2160p" />
+          <span class="quality-option-label">4K (2160p)</span>
+          <small>Prefer ultra-high resolution sources</small>
+        </label>
+
+        <label class="quality-option">
+          <input type="radio" name="quality" value="1080p" />
+          <span class="quality-option-label">Full HD (1080p)</span>
+          <small>Balanced quality and compatibility</small>
+        </label>
+
+        <label class="quality-option">
+          <input type="radio" name="quality" value="720p" />
+          <span class="quality-option-label">HD (720p)</span>
+          <small>Lower bitrate for smoother playback</small>
+        </label>
+
+        <section class="sync-section" aria-labelledby="audioSyncTitle">
+          <div class="sync-header">
+            <h2 id="audioSyncTitle">Manual Audio Sync</h2>
+            <p class="sync-current">Current Delay: <strong id="audioSyncValue">Off (0 ms)</strong></p>
+          </div>
+
+          <div class="sync-controls">
+            <label class="sync-slider-wrap" for="audioSyncMs">
+              <span>Audio Delay</span>
+              <input
+                id="audioSyncMs"
+                name="audioSyncMs"
+                type="range"
+                min="0"
+                max="1500"
+                step="5"
+                value="0"
+              />
+            </label>
+
+            <label class="sync-number-wrap" for="audioSyncMsNumber">
+              <span>Delay (ms)</span>
+              <input id="audioSyncMsNumber" type="number" min="0" max="1500" step="5" value="0" inputmode="numeric" />
+            </label>
+          </div>
+
+          <p class="sync-help">Default is +800ms. Increase if audio still feels slightly early.</p>
+        </section>
+
+        <div class="settings-actions">
+          <button id="saveQuality" class="save-btn" type="submit">Save Preference</button>
+          <p id="saveStatus" class="save-status" role="status" aria-live="polite"></p>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script type="module" src="settings.js"></script>
+</body>
+</html>

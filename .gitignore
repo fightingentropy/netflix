@@ -1,0 +1,23 @@
+# OS / editor
+.DS_Store
+
+# Dependencies / builds
+node_modules/
+dist/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Local playback/cache artifacts
+.hls-cache/
+.tmp-thumbs/
+.resolver-cache.sqlite
+.resolver-cache.sqlite-shm
+.resolver-cache.sqlite-wal
+
+# Large local media files
+*.mkv
+tate*.mp4
+Jeffrey Epstein- Filthy Rich | Official Trailer | Netflix.mp4
