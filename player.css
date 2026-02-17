@@ -442,10 +442,10 @@ body {
 }
 
 .audio-popover {
-  right: -30px;
-  width: min(980px, calc(100vw - 24px));
-  max-height: min(78vh, 740px);
-  padding: 22px 0 18px;
+  right: -14px;
+  width: min(760px, calc(100vw - 22px));
+  max-height: min(62vh, 520px);
+  padding: 16px 0 14px;
   border-radius: 12px;
   background:
     linear-gradient(90deg, rgba(39, 39, 42, 0.97) 0%, rgba(30, 31, 35, 0.96) 44%, rgba(26, 27, 30, 0.95) 100%),
@@ -456,6 +456,43 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
+}
+
+.audio-popover-grid.subtitles-only {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 620px;
+}
+
+.audio-popover-grid.subtitles-only .audio-track-column {
+  display: none;
+}
+
+.audio-popover-grid.subtitles-only .audio-subtitle-column {
+  border-left: 0;
+  padding: 0 24px 6px;
+}
+
+.audio-popover-grid.subtitles-only .audio-column-title {
+  margin: 0 0 10px;
+  font-size: clamp(1.45rem, 2.4vw, 2.2rem);
+}
+
+.audio-popover-grid.subtitles-only .audio-options {
+  max-height: min(40vh, 320px);
+  padding-right: 8px;
+  margin-right: -2px;
+  gap: 1px;
+}
+
+.audio-popover-grid.subtitles-only .audio-option {
+  min-height: 48px;
+  padding: 8px 10px 8px 42px;
+  font-size: clamp(1.2rem, 1.55vw, 1.7rem);
+}
+
+.audio-popover-grid.subtitles-only .audio-option::before {
+  left: 10px;
+  font-size: 1.55rem;
 }
 
 .audio-popover-column {
@@ -563,6 +600,64 @@ body {
   box-shadow: none;
 }
 
+.audio-sync-panel {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.audio-sync-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.audio-sync-title {
+  margin: 0;
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(245, 245, 245, 0.72);
+}
+
+.audio-sync-current {
+  margin: 0;
+  font-size: 0.96rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.audio-sync-controls {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: 10px;
+  align-items: center;
+}
+
+.audio-sync-range {
+  width: 100%;
+  accent-color: var(--ui-accent);
+}
+
+.audio-sync-number {
+  width: 100%;
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.28);
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 4px 8px;
+}
+
+.audio-sync-number:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 0;
+}
+
 @media (max-width: 920px) {
   .controls-panel {
     padding: 0 12px 16px;
@@ -626,8 +721,9 @@ body {
 
   .audio-popover {
     right: -6px;
-    width: min(96vw, 560px);
-    padding: 16px 0 14px;
+    width: min(88vw, 430px);
+    max-height: min(54vh, 340px);
+    padding: 12px 0 10px;
   }
 
   .audio-popover-grid {
@@ -643,6 +739,37 @@ body {
     border-top: 1px solid rgba(255, 255, 255, 0.15);
     margin-top: 8px;
     padding-top: 14px;
+  }
+
+  .audio-popover-grid.subtitles-only .audio-subtitle-column {
+    border-top: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-bottom: 4px;
+  }
+
+  .audio-popover-grid.subtitles-only .audio-column-title {
+    margin-bottom: 8px;
+    font-size: clamp(1.25rem, 5.1vw, 1.7rem);
+  }
+
+  .audio-popover-grid.subtitles-only .audio-options {
+    max-height: min(26vh, 180px);
+    padding-right: 6px;
+    margin-right: -2px;
+  }
+
+  .audio-popover-grid.subtitles-only .audio-option {
+    min-height: 40px;
+    padding: 6px 8px 6px 34px;
+    font-size: clamp(0.95rem, 4.1vw, 1.15rem);
+  }
+
+  .audio-popover-grid.subtitles-only .audio-option::before {
+    left: 8px;
+    font-size: 1.15rem;
   }
 
   .audio-column-title {
@@ -665,6 +792,19 @@ body {
   .audio-option::before {
     left: 9px;
     font-size: 1.45rem;
+  }
+
+  .audio-sync-panel {
+    margin-top: 12px;
+    padding-top: 12px;
+  }
+
+  .audio-sync-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .audio-sync-number {
+    min-height: 32px;
   }
 
   .speed-popover-title {

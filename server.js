@@ -60,12 +60,39 @@ const TITLE_PREFERENCES_STALE_MS = 90 * 24 * 60 * 60 * 1000;
 const HLS_SEGMENT_DURATION_SECONDS = 6;
 const HLS_SEGMENT_STALE_MS = 6 * 60 * 60 * 1000;
 const HLS_SEGMENT_MAX_FILES = 3000;
+const HLS_TRANSCODE_IDLE_MS = 8 * 60 * 1000;
+const HLS_SEGMENT_WAIT_TIMEOUT_MS = 30000;
+const HLS_SEGMENT_WAIT_POLL_MS = 180;
+const SUBTITLE_EXTRACT_TIMEOUT_MS = 3 * 60 * 1000;
+const HLS_HWACCEL_MODE = normalizeHlsHwaccelMode(process.env.HLS_HWACCEL || "none");
+const AUTO_AUDIO_SYNC_ENABLED = normalizeAutoAudioSyncEnabled(process.env.AUTO_AUDIO_SYNC || "0");
+const PLAYBACK_SESSIONS_ENABLED = normalizeAutoAudioSyncEnabled(process.env.PLAYBACK_SESSIONS || "0");
 const inFlightMovieResolves = new Map();
 const inFlightMediaProbeRequests = new Map();
-const hlsSegmentBuilds = new Map();
+const inFlightSubtitleVttBuilds = new Map();
+const hlsTranscodeJobs = new Map();
 const CACHE_SWEEP_INTERVAL_MS = 60 * 1000;
 const SERVER_STARTED_AT = Date.now();
+const FFMPEG_CAPABILITY_REFRESH_MS = 5 * 60 * 1000;
 let persistentCacheDb = null;
+let loggedHlsHwaccelFallback = false;
+let ffmpegCapabilityTask = null;
+let ffmpegCapabilitySnapshot = {
+  checkedAt: 0,
+  ffmpegAvailable: false,
+  ffprobeAvailable: false,
+  ffmpegVersion: "",
+  ffprobeVersion: "",
+  requestedHlsHwaccel: HLS_HWACCEL_MODE,
+  effectiveHlsHwaccel: "none",
+  hwaccels: [],
+  encoders: {
+    h264_videotoolbox: false,
+    h264_nvenc: false,
+    h264_qsv: false,
+  },
+  notes: [],
+};
 const cacheStats = {
   resolvedStreamHits: 0,
   resolvedStreamMisses: 0,
@@ -205,6 +232,9 @@ function initializePersistentCacheDb() {
 }
 
 initializePersistentCacheDb();
+void getFfmpegCapabilities().catch(() => {
+  // Health endpoint can still probe lazily on demand.
+});
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -251,7 +281,7 @@ function toLocalPath(pathname) {
   const trimmed = normalized.startsWith("/") ? normalized.slice(1) : normalized;
   const filePath = join(ROOT_DIR, trimmed);
 
-  if (!filePath.startsWith(ROOT_DIR)) {
+  if (!isPathInsideRootDir(filePath)) {
     return null;
   }
 
@@ -260,6 +290,18 @@ function toLocalPath(pathname) {
 
 function isHttpUrl(value) {
   return /^https?:\/\//i.test(String(value || "").trim());
+}
+
+function isPathInsideRootDir(value) {
+  const candidate = String(value || "");
+  if (!candidate) {
+    return false;
+  }
+  if (candidate === ROOT_DIR) {
+    return true;
+  }
+  const rootWithSlash = ROOT_DIR.endsWith("/") ? ROOT_DIR : `${ROOT_DIR}/`;
+  return candidate.startsWith(rootWithSlash);
 }
 
 function isPlaybackProxyUrl(value) {
@@ -298,25 +340,29 @@ function parsePlaybackProxyUrl(value) {
 
 function buildRemuxProxyUrl(input, {
   audioStreamIndex = -1,
+  subtitleStreamIndex = -1,
 } = {}) {
   const normalizedInput = String(input || "").trim();
   if (!normalizedInput) {
     return "";
   }
   const existingMeta = parsePlaybackProxyUrl(normalizedInput);
-  if (existingMeta?.mode === "remux" && existingMeta.input) {
-    if (Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0) {
-      const query = new URLSearchParams({
-        input: existingMeta.input,
-        audioStream: String(Math.floor(audioStreamIndex)),
-      });
-      return `/api/remux?${query.toString()}`;
-    }
-    return normalizedInput;
-  }
+  const resolvedAudioStreamIndex = Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0
+    ? Math.floor(audioStreamIndex)
+    : (Number.isFinite(existingMeta?.audioStreamIndex) && existingMeta.audioStreamIndex >= 0
+      ? Math.floor(existingMeta.audioStreamIndex)
+      : -1);
+  const resolvedSubtitleStreamIndex = Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0
+    ? Math.floor(subtitleStreamIndex)
+    : (Number.isFinite(existingMeta?.subtitleStreamIndex) && existingMeta.subtitleStreamIndex >= 0
+      ? Math.floor(existingMeta.subtitleStreamIndex)
+      : -1);
   const query = new URLSearchParams({ input: existingMeta?.input || normalizedInput });
-  if (Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0) {
-    query.set("audioStream", String(Math.floor(audioStreamIndex)));
+  if (resolvedAudioStreamIndex >= 0) {
+    query.set("audioStream", String(resolvedAudioStreamIndex));
+  }
+  if (resolvedSubtitleStreamIndex >= 0) {
+    query.set("subtitleStream", String(resolvedSubtitleStreamIndex));
   }
   return `/api/remux?${query.toString()}`;
 }
@@ -372,6 +418,9 @@ function shouldPreferSoftwareDecode(source) {
 function shouldPreferSoftwareDecodeSource(source, filename = "") {
   const normalizedSource = String(source || "").toLowerCase();
   if (normalizedSource.includes("download.real-debrid.com")) {
+    if (isLikelyHtml5PlayableUrl(source, filename)) {
+      return false;
+    }
     return true;
   }
 
@@ -380,6 +429,9 @@ function shouldPreferSoftwareDecodeSource(source, filename = "") {
   }
 
   const normalizedFilename = String(filename || "").toLowerCase();
+  if (isLikelyHtml5PlayableUrl(source, normalizedFilename)) {
+    return false;
+  }
   return (
     normalizedFilename.endsWith(".mkv")
     || normalizedFilename.endsWith(".avi")
@@ -435,6 +487,10 @@ function resolveTranscodeInput(rawInput) {
   }
 
   if (isHttpUrl(input)) {
+    return input;
+  }
+
+  if (input.startsWith("/") && isPathInsideRootDir(input)) {
     return input;
   }
 
@@ -499,7 +555,98 @@ function normalizeAudioSyncMs(value) {
     return 0;
   }
   const rounded = Math.round(parsed);
-  return Math.max(0, Math.min(1500, rounded));
+  return Math.max(-1500, Math.min(1500, rounded));
+}
+
+function normalizeAutoAudioSyncEnabled(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return (
+    normalized === "1"
+    || normalized === "true"
+    || normalized === "yes"
+    || normalized === "on"
+  );
+}
+
+function normalizeHlsHwaccelMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "none" || normalized === "off" || normalized === "false" || normalized === "0") {
+    return "none";
+  }
+  if (normalized === "auto") {
+    return process.platform === "darwin" ? "videotoolbox" : "none";
+  }
+  if (normalized === "videotoolbox" || normalized === "vt") {
+    return "videotoolbox";
+  }
+  if (normalized === "cuda" || normalized === "nvenc") {
+    return "cuda";
+  }
+  if (normalized === "qsv" || normalized === "intel") {
+    return "qsv";
+  }
+  return "none";
+}
+
+function buildHlsVideoEncodeConfig(hwaccelMode = HLS_HWACCEL_MODE) {
+  if (hwaccelMode === "videotoolbox") {
+    return {
+      mode: "videotoolbox",
+      preInputArgs: ["-hwaccel", "videotoolbox"],
+      videoEncodeArgs: [
+        "-c:v",
+        "h264_videotoolbox",
+        "-b:v",
+        "4500k",
+        "-maxrate",
+        "5500k",
+        "-bufsize",
+        "9000k",
+      ],
+    };
+  }
+  if (hwaccelMode === "cuda") {
+    return {
+      mode: "cuda",
+      preInputArgs: ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+      videoEncodeArgs: [
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p5",
+        "-cq",
+        "23",
+        "-b:v",
+        "0",
+      ],
+    };
+  }
+  if (hwaccelMode === "qsv") {
+    return {
+      mode: "qsv",
+      preInputArgs: ["-hwaccel", "qsv"],
+      videoEncodeArgs: [
+        "-c:v",
+        "h264_qsv",
+        "-global_quality",
+        "23",
+        "-look_ahead",
+        "0",
+      ],
+    };
+  }
+  return {
+    mode: "none",
+    preInputArgs: [],
+    videoEncodeArgs: [
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "23",
+    ],
+  };
 }
 
 function buildMediaProbeCacheKey(source, { sourceHash = "", selectedFile = "" } = {}) {
@@ -616,6 +763,155 @@ async function runProcessAndCapture(command, {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function parseFfmpegVersionLine(rawOutput) {
+  const text = String(rawOutput || "");
+  const line = text.split(/\r?\n/).find((item) => item.toLowerCase().startsWith("ffmpeg version"));
+  return String(line || "").trim();
+}
+
+function parseFfprobeVersionLine(rawOutput) {
+  const text = String(rawOutput || "");
+  const line = text.split(/\r?\n/).find((item) => item.toLowerCase().startsWith("ffprobe version"));
+  return String(line || "").trim();
+}
+
+function parseHwaccelList(rawOutput) {
+  const lines = String(rawOutput || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().toLowerCase())
+    .filter((line) => line && line !== "hardware acceleration methods:" && !line.startsWith("ffmpeg version"));
+  return [...new Set(lines)];
+}
+
+function hasFfmpegEncoder(rawOutput, encoderName) {
+  const pattern = new RegExp(`\\b${String(encoderName || "").toLowerCase()}\\b`);
+  return pattern.test(String(rawOutput || "").toLowerCase());
+}
+
+function canUseRequestedHlsHwaccel(snapshot) {
+  const mode = String(snapshot?.requestedHlsHwaccel || "none");
+  if (mode === "none") {
+    return true;
+  }
+  if (!snapshot?.ffmpegAvailable) {
+    return false;
+  }
+
+  const hwaccels = Array.isArray(snapshot.hwaccels) ? snapshot.hwaccels : [];
+  const encoders = snapshot?.encoders || {};
+  if (mode === "videotoolbox") {
+    return Boolean(encoders.h264_videotoolbox) && hwaccels.includes("videotoolbox");
+  }
+  if (mode === "cuda") {
+    return Boolean(encoders.h264_nvenc) && hwaccels.includes("cuda");
+  }
+  if (mode === "qsv") {
+    return Boolean(encoders.h264_qsv) && hwaccels.includes("qsv");
+  }
+  return false;
+}
+
+async function probeFfmpegCapabilities() {
+  const snapshot = {
+    checkedAt: Date.now(),
+    ffmpegAvailable: false,
+    ffprobeAvailable: false,
+    ffmpegVersion: "",
+    ffprobeVersion: "",
+    requestedHlsHwaccel: HLS_HWACCEL_MODE,
+    effectiveHlsHwaccel: "none",
+    hwaccels: [],
+    encoders: {
+      h264_videotoolbox: false,
+      h264_nvenc: false,
+      h264_qsv: false,
+    },
+    notes: [],
+  };
+
+  try {
+    const version = await runProcessAndCapture(
+      ["ffmpeg", "-hide_banner", "-version"],
+      { timeoutMs: 5000, binary: false },
+    );
+    snapshot.ffmpegAvailable = true;
+    snapshot.ffmpegVersion = parseFfmpegVersionLine(version);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "unknown error");
+    snapshot.notes.push(`ffmpeg unavailable: ${message}`);
+  }
+
+  try {
+    const version = await runProcessAndCapture(
+      ["ffprobe", "-hide_banner", "-version"],
+      { timeoutMs: 5000, binary: false },
+    );
+    snapshot.ffprobeAvailable = true;
+    snapshot.ffprobeVersion = parseFfprobeVersionLine(version);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "unknown error");
+    snapshot.notes.push(`ffprobe unavailable: ${message}`);
+  }
+
+  if (snapshot.ffmpegAvailable) {
+    try {
+      const hwaccels = await runProcessAndCapture(
+        ["ffmpeg", "-hide_banner", "-hwaccels"],
+        { timeoutMs: 5000, binary: false },
+      );
+      snapshot.hwaccels = parseHwaccelList(hwaccels);
+    } catch {
+      snapshot.notes.push("Unable to read ffmpeg hwaccels.");
+    }
+
+    try {
+      const encoders = await runProcessAndCapture(
+        ["ffmpeg", "-hide_banner", "-encoders"],
+        { timeoutMs: 8000, binary: false },
+      );
+      snapshot.encoders.h264_videotoolbox = hasFfmpegEncoder(encoders, "h264_videotoolbox");
+      snapshot.encoders.h264_nvenc = hasFfmpegEncoder(encoders, "h264_nvenc");
+      snapshot.encoders.h264_qsv = hasFfmpegEncoder(encoders, "h264_qsv");
+    } catch {
+      snapshot.notes.push("Unable to read ffmpeg encoders.");
+    }
+  }
+
+  if (canUseRequestedHlsHwaccel(snapshot)) {
+    snapshot.effectiveHlsHwaccel = snapshot.requestedHlsHwaccel;
+  } else {
+    if (snapshot.requestedHlsHwaccel !== "none") {
+      snapshot.notes.push(`Requested HLS hwaccel (${snapshot.requestedHlsHwaccel}) is not supported; software fallback will be used.`);
+    }
+    snapshot.effectiveHlsHwaccel = "none";
+  }
+
+  return snapshot;
+}
+
+async function getFfmpegCapabilities(forceRefresh = false) {
+  const isFresh = ffmpegCapabilitySnapshot.checkedAt > 0
+    && (Date.now() - ffmpegCapabilitySnapshot.checkedAt) < FFMPEG_CAPABILITY_REFRESH_MS;
+  if (!forceRefresh && isFresh) {
+    return ffmpegCapabilitySnapshot;
+  }
+
+  if (ffmpegCapabilityTask) {
+    return ffmpegCapabilityTask;
+  }
+
+  ffmpegCapabilityTask = probeFfmpegCapabilities()
+    .then((snapshot) => {
+      ffmpegCapabilitySnapshot = snapshot;
+      return snapshot;
+    })
+    .finally(() => {
+      ffmpegCapabilityTask = null;
+    });
+
+  return ffmpegCapabilityTask;
 }
 
 function parseRuntimeFromLabelSeconds(value) {
@@ -1078,12 +1374,25 @@ function computeSourceHealthScore(sourceKey) {
   return score;
 }
 
-function buildHlsSegmentCacheKey(sourceInput, audioStreamIndex, segmentIndex) {
-  return `${sourceInput}|a:${Number.isFinite(audioStreamIndex) ? audioStreamIndex : -1}|i:${segmentIndex}`;
+function buildHlsTranscodeJobKey(sourceInput, audioStreamIndex) {
+  return `${sourceInput}|a:${Number.isFinite(audioStreamIndex) ? audioStreamIndex : -1}`;
 }
 
-function buildHlsSegmentCachePath(segmentKey) {
-  return join(HLS_CACHE_DIR, `${hashStableString(segmentKey)}.ts`);
+function buildHlsTranscodeOutputPrefix(jobKey) {
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  return join(HLS_CACHE_DIR, `${hashStableString(jobKey)}-${stamp}`);
+}
+
+function buildHlsTranscodeSegmentPathFromPrefix(outputPrefix, segmentIndex) {
+  return `${outputPrefix}-${String(Math.max(0, Math.floor(segmentIndex))).padStart(6, "0")}.ts`;
+}
+
+function buildHlsTranscodeSegmentPattern(outputPrefix) {
+  return `${outputPrefix}-%06d.ts`;
+}
+
+function buildHlsTranscodePlaylistPath(outputPrefix) {
+  return `${outputPrefix}.m3u8`;
 }
 
 function buildSubtitleCachePath(sourceInput, subtitleStreamIndex) {
@@ -1098,79 +1407,280 @@ async function ensureHlsCacheDirectory() {
   }
 }
 
-async function getOrCreateHlsSegment(sourceInput, segmentIndex, audioStreamIndex = -1) {
+function buildHlsTranscodeArgs(sourceInput, audioStreamIndex, encodeConfig, outputPrefix) {
+  const safeAudioStreamIndex = Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0
+    ? Math.floor(audioStreamIndex)
+    : -1;
+  return [
+    "ffmpeg",
+    "-v",
+    "error",
+    "-y",
+    ...encodeConfig.preInputArgs,
+    "-i",
+    sourceInput,
+    "-map",
+    "0:v:0",
+    "-map",
+    safeAudioStreamIndex >= 0 ? `0:${safeAudioStreamIndex}?` : "0:a:0?",
+    "-sn",
+    ...encodeConfig.videoEncodeArgs,
+    "-c:a",
+    "aac",
+    "-b:a",
+    "160k",
+    "-f",
+    "segment",
+    "-segment_time",
+    String(HLS_SEGMENT_DURATION_SECONDS),
+    "-segment_format",
+    "mpegts",
+    "-segment_list_type",
+    "m3u8",
+    "-segment_list_size",
+    "0",
+    "-segment_list",
+    buildHlsTranscodePlaylistPath(outputPrefix),
+    "-reset_timestamps",
+    "1",
+    buildHlsTranscodeSegmentPattern(outputPrefix),
+  ];
+}
+
+function terminateHlsTranscodeJob(job) {
+  if (!job?.process) {
+    return;
+  }
+  try {
+    job.process.kill();
+  } catch {
+    // Ignore kill errors for stale jobs.
+  }
+}
+
+function startHlsTranscodeJob(sourceInput, audioStreamIndex, encodeMode = HLS_HWACCEL_MODE, allowSoftwareFallback = true) {
+  const safeAudioStreamIndex = Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0
+    ? Math.floor(audioStreamIndex)
+    : -1;
+  const jobKey = buildHlsTranscodeJobKey(sourceInput, safeAudioStreamIndex);
+  const outputPrefix = buildHlsTranscodeOutputPrefix(jobKey);
+  const encodeConfig = buildHlsVideoEncodeConfig(encodeMode);
+  const args = buildHlsTranscodeArgs(sourceInput, safeAudioStreamIndex, encodeConfig, outputPrefix);
+  const process = Bun.spawn(args, {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const stderrTask = new Response(process.stderr).text().catch(() => "");
+  const now = Date.now();
+  const job = {
+    key: jobKey,
+    sourceInput,
+    audioStreamIndex: safeAudioStreamIndex,
+    encodeMode: encodeConfig.mode,
+    allowSoftwareFallback: Boolean(allowSoftwareFallback),
+    outputPrefix,
+    playlistPath: buildHlsTranscodePlaylistPath(outputPrefix),
+    process,
+    stderrTask,
+    startedAt: now,
+    lastAccessedAt: now,
+    finishedAt: 0,
+    exited: false,
+    completed: false,
+    exitCode: null,
+    lastError: "",
+  };
+  job.exitTask = process.exited
+    .then(async (code) => {
+      job.exited = true;
+      job.exitCode = Number(code || 0);
+      job.completed = job.exitCode === 0;
+      job.finishedAt = Date.now();
+      job.lastError = String(await stderrTask || "").trim();
+      return job.exitCode;
+    })
+    .catch((error) => {
+      job.exited = true;
+      job.completed = false;
+      job.exitCode = 1;
+      job.finishedAt = Date.now();
+      job.lastError = error instanceof Error ? error.message : String(error || "");
+      return 1;
+    });
+
+  hlsTranscodeJobs.set(jobKey, job);
+  return job;
+}
+
+async function ensureHlsTranscodeJob(sourceInput, audioStreamIndex = -1) {
+  const safeAudioStreamIndex = Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0
+    ? Math.floor(audioStreamIndex)
+    : -1;
+  const jobKey = buildHlsTranscodeJobKey(sourceInput, safeAudioStreamIndex);
+  const existing = hlsTranscodeJobs.get(jobKey);
+  if (existing) {
+    existing.lastAccessedAt = Date.now();
+    if (!existing.exited || existing.exitCode === 0) {
+      return existing;
+    }
+
+    if (existing.allowSoftwareFallback && existing.encodeMode !== "none") {
+      if (!loggedHlsHwaccelFallback) {
+        loggedHlsHwaccelFallback = true;
+        const message = existing.lastError || `exit code ${existing.exitCode}`;
+        console.warn(`[transcode] HLS hardware acceleration (${existing.encodeMode}) failed, falling back to software encode: ${message}`);
+      }
+      hlsTranscodeJobs.delete(jobKey);
+      return startHlsTranscodeJob(sourceInput, safeAudioStreamIndex, "none", false);
+    }
+
+    hlsTranscodeJobs.delete(jobKey);
+  }
+
+  await ensureHlsCacheDirectory();
+  const preferredMode = ffmpegCapabilitySnapshot.checkedAt > 0
+    ? ffmpegCapabilitySnapshot.effectiveHlsHwaccel
+    : HLS_HWACCEL_MODE;
+  const allowSoftwareFallback = preferredMode !== "none";
+  return startHlsTranscodeJob(sourceInput, safeAudioStreamIndex, preferredMode, allowSoftwareFallback);
+}
+
+async function waitForHlsSegmentFromJob(job, segmentIndex, timeoutMs = HLS_SEGMENT_WAIT_TIMEOUT_MS) {
+  const safeSegmentIndex = Math.max(0, Math.floor(segmentIndex));
+  const startedAt = Date.now();
+  let activeJob = job;
+
+  while ((Date.now() - startedAt) < Math.max(1000, timeoutMs)) {
+    if (!activeJob) {
+      throw new Error("HLS transcode job is unavailable.");
+    }
+
+    activeJob.lastAccessedAt = Date.now();
+    const segmentPath = buildHlsTranscodeSegmentPathFromPrefix(activeJob.outputPrefix, safeSegmentIndex);
+    try {
+      const segmentStat = await stat(segmentPath);
+      if (segmentStat.isFile() && segmentStat.size > 0) {
+        return segmentPath;
+      }
+    } catch {
+      // Segment file not available yet.
+    }
+
+    if (activeJob.exited) {
+      if (activeJob.exitCode === 0) {
+        const segmentPath = buildHlsTranscodeSegmentPathFromPrefix(activeJob.outputPrefix, safeSegmentIndex);
+        return renderHlsSegmentOnDemand(activeJob.sourceInput, safeSegmentIndex, activeJob.audioStreamIndex, segmentPath);
+      }
+
+      if (activeJob.allowSoftwareFallback && activeJob.encodeMode !== "none") {
+        if (!loggedHlsHwaccelFallback) {
+          loggedHlsHwaccelFallback = true;
+          const message = activeJob.lastError || `exit code ${activeJob.exitCode}`;
+          console.warn(`[transcode] HLS hardware acceleration (${activeJob.encodeMode}) failed, falling back to software encode: ${message}`);
+        }
+        hlsTranscodeJobs.delete(activeJob.key);
+        activeJob = startHlsTranscodeJob(activeJob.sourceInput, activeJob.audioStreamIndex, "none", false);
+        continue;
+      }
+
+      const detail = activeJob.lastError || `exit code ${activeJob.exitCode}`;
+      throw new Error(`HLS transcode failed: ${detail}`);
+    }
+
+    await sleep(HLS_SEGMENT_WAIT_POLL_MS);
+  }
+
+  const timeoutSegmentPath = activeJob?.outputPrefix
+    ? buildHlsTranscodeSegmentPathFromPrefix(activeJob.outputPrefix, safeSegmentIndex)
+    : "";
+  return renderHlsSegmentOnDemand(
+    activeJob?.sourceInput || "",
+    safeSegmentIndex,
+    activeJob?.audioStreamIndex ?? -1,
+    timeoutSegmentPath,
+  );
+}
+
+async function renderHlsSegmentOnDemand(sourceInput, segmentIndex, audioStreamIndex = -1, outputPath = "") {
+  const safeSourceInput = String(sourceInput || "").trim();
+  if (!safeSourceInput) {
+    throw new Error("Missing playback input.");
+  }
+
+  await ensureHlsCacheDirectory();
   const safeSegmentIndex = Math.max(0, Math.floor(segmentIndex));
   const safeAudioStreamIndex = Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0
     ? Math.floor(audioStreamIndex)
     : -1;
+  const segmentPath = String(outputPath || "").trim() || buildHlsTranscodeSegmentPathFromPrefix(
+    buildHlsTranscodeOutputPrefix(buildHlsTranscodeJobKey(safeSourceInput, safeAudioStreamIndex)),
+    safeSegmentIndex,
+  );
+  const segmentStartSeconds = safeSegmentIndex * HLS_SEGMENT_DURATION_SECONDS;
+  const buildSegmentArgs = (encodeConfig) => [
+    "ffmpeg",
+    "-v",
+    "error",
+    ...encodeConfig.preInputArgs,
+    "-ss",
+    String(segmentStartSeconds),
+    "-i",
+    safeSourceInput,
+    "-t",
+    String(HLS_SEGMENT_DURATION_SECONDS),
+    "-map",
+    "0:v:0",
+    "-map",
+    safeAudioStreamIndex >= 0 ? `0:${safeAudioStreamIndex}?` : "0:a:0?",
+    "-sn",
+    ...encodeConfig.videoEncodeArgs,
+    "-c:a",
+    "aac",
+    "-b:a",
+    "160k",
+    "-f",
+    "mpegts",
+    "pipe:1",
+  ];
 
-  const cacheKey = buildHlsSegmentCacheKey(sourceInput, safeAudioStreamIndex, safeSegmentIndex);
-  const segmentPath = buildHlsSegmentCachePath(cacheKey);
-
+  const preferredMode = ffmpegCapabilitySnapshot.checkedAt > 0
+    ? ffmpegCapabilitySnapshot.effectiveHlsHwaccel
+    : HLS_HWACCEL_MODE;
+  const primaryEncodeConfig = buildHlsVideoEncodeConfig(preferredMode);
+  let segmentBytes = null;
   try {
-    const segmentStat = await stat(segmentPath);
-    if (segmentStat.isFile() && (Date.now() - segmentStat.mtimeMs) < HLS_SEGMENT_STALE_MS) {
-      return segmentPath;
-    }
-  } catch {
-    // Build segment on cache miss.
-  }
-
-  const existingBuild = hlsSegmentBuilds.get(cacheKey);
-  if (existingBuild) {
-    return existingBuild;
-  }
-
-  const buildTask = (async () => {
-    await ensureHlsCacheDirectory();
-    const segmentStartSeconds = safeSegmentIndex * HLS_SEGMENT_DURATION_SECONDS;
-    const ffmpegArgs = [
-      "ffmpeg",
-      "-v",
-      "error",
-      "-ss",
-      String(segmentStartSeconds),
-      "-i",
-      sourceInput,
-      "-t",
-      String(HLS_SEGMENT_DURATION_SECONDS),
-      "-map",
-      "0:v:0",
-      "-map",
-      safeAudioStreamIndex >= 0 ? `0:${safeAudioStreamIndex}?` : "0:a:0?",
-      "-sn",
-      "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
-      "-crf",
-      "23",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "160k",
-      "-f",
-      "mpegts",
-      "pipe:1",
-    ];
-
-    const segmentBytes = await runProcessAndCapture(ffmpegArgs, {
+    segmentBytes = await runProcessAndCapture(buildSegmentArgs(primaryEncodeConfig), {
       timeoutMs: 20000,
       binary: true,
     });
-    if (!segmentBytes?.length) {
-      throw new Error("FFmpeg produced an empty HLS segment.");
+  } catch (error) {
+    if (primaryEncodeConfig.mode !== "none") {
+      if (!loggedHlsHwaccelFallback) {
+        loggedHlsHwaccelFallback = true;
+        const message = error instanceof Error ? error.message : String(error || "Unknown FFmpeg error");
+        console.warn(`[transcode] HLS hardware acceleration (${primaryEncodeConfig.mode}) failed, falling back to software encode: ${message}`);
+      }
+      segmentBytes = await runProcessAndCapture(
+        buildSegmentArgs(buildHlsVideoEncodeConfig("none")),
+        { timeoutMs: 20000, binary: true },
+      );
+    } else {
+      throw error;
     }
+  }
 
-    await Bun.write(segmentPath, segmentBytes);
-    return segmentPath;
-  })()
-    .finally(() => {
-      hlsSegmentBuilds.delete(cacheKey);
-    });
+  if (!segmentBytes?.length) {
+    throw new Error(`Unable to create HLS segment ${safeSegmentIndex}.`);
+  }
+  await Bun.write(segmentPath, segmentBytes);
+  return segmentPath;
+}
 
-  hlsSegmentBuilds.set(cacheKey, buildTask);
-  return buildTask;
+async function getOrCreateHlsSegment(sourceInput, segmentIndex, audioStreamIndex = -1) {
+  const safeSegmentIndex = Math.max(0, Math.floor(segmentIndex));
+  const job = await ensureHlsTranscodeJob(sourceInput, audioStreamIndex);
+  return waitForHlsSegmentFromJob(job, safeSegmentIndex);
 }
 
 async function createHlsPlaylistResponse(input, audioStreamIndex = -1) {
@@ -1181,6 +1691,10 @@ async function createHlsPlaylistResponse(input, audioStreamIndex = -1) {
   const safeAudioStream = Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0
     ? Math.floor(audioStreamIndex)
     : -1;
+
+  void ensureHlsTranscodeJob(sourceInput, safeAudioStream).catch(() => {
+    // Segment requests will surface any transcode startup failure.
+  });
 
   const lines = [
     "#EXTM3U",
@@ -1225,31 +1739,26 @@ async function createHlsSegmentResponse(input, segmentIndex, audioStreamIndex) {
   });
 }
 
-async function createSubtitleVttResponse(input, subtitleStreamIndex) {
-  const sourceInput = resolveTranscodeInput(input);
+function buildSubtitleCacheKey(sourceInput, subtitleStreamIndex) {
+  return `${sourceInput}|s:${subtitleStreamIndex}`;
+}
+
+async function hasFreshSubtitleCacheFile(sourceInput, subtitleStreamIndex) {
+  const subtitlePath = buildSubtitleCachePath(sourceInput, subtitleStreamIndex);
+  try {
+    const subtitleStat = await stat(subtitlePath);
+    return subtitleStat.isFile() && (Date.now() - subtitleStat.mtimeMs) < HLS_SEGMENT_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function extractSubtitleVttText(sourceInput, subtitleStreamIndex) {
   const safeStreamIndex = Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0
     ? Math.floor(subtitleStreamIndex)
     : -1;
   if (safeStreamIndex < 0) {
-    throw new Error("Missing or invalid subtitle stream index.");
-  }
-
-  await ensureHlsCacheDirectory();
-  const subtitlePath = buildSubtitleCachePath(sourceInput, safeStreamIndex);
-
-  try {
-    const subtitleStat = await stat(subtitlePath);
-    if (subtitleStat.isFile() && (Date.now() - subtitleStat.mtimeMs) < HLS_SEGMENT_STALE_MS) {
-      return new Response(Bun.file(subtitlePath), {
-        status: 200,
-        headers: {
-          "Content-Type": "text/vtt; charset=utf-8",
-          "Cache-Control": "public, max-age=120",
-        },
-      });
-    }
-  } catch {
-    // Build subtitle file when cache is absent.
+    return "";
   }
 
   const tryExtractSubtitle = async (mapSpecifier) => {
@@ -1268,26 +1777,104 @@ async function createSubtitleVttResponse(input, subtitleStreamIndex) {
         "webvtt",
         "pipe:1",
       ],
-      { timeoutMs: 25000, binary: false },
+      { timeoutMs: SUBTITLE_EXTRACT_TIMEOUT_MS, binary: false },
     );
   };
 
   let subtitleText = "";
   try {
-    subtitleText = await tryExtractSubtitle(`0:${safeStreamIndex}?`);
+    subtitleText = await tryExtractSubtitle(`0:${safeStreamIndex}`);
   } catch {
-    try {
-      const probe = await probeMediaTracks(sourceInput);
-      const subtitleTracks = Array.isArray(probe?.subtitleTracks) ? probe.subtitleTracks : [];
-      const subtitleOrdinal = subtitleTracks.findIndex((track) => Number(track?.streamIndex) === safeStreamIndex);
-      if (subtitleOrdinal >= 0) {
-        subtitleText = await tryExtractSubtitle(`0:s:${subtitleOrdinal}`);
-      }
-    } catch {
-      subtitleText = "";
-    }
+    subtitleText = "";
+  }
+  if (String(subtitleText || "").trim()) {
+    return subtitleText;
   }
 
+  try {
+    const probe = await probeMediaTracks(sourceInput);
+    const subtitleTracks = Array.isArray(probe?.subtitleTracks) ? probe.subtitleTracks : [];
+    const subtitleOrdinal = subtitleTracks.findIndex((track) => Number(track?.streamIndex) === safeStreamIndex);
+    if (subtitleOrdinal >= 0) {
+      subtitleText = await tryExtractSubtitle(`0:s:${subtitleOrdinal}`);
+    }
+  } catch {
+    subtitleText = "";
+  }
+
+  return subtitleText;
+}
+
+function queueSubtitleVttBuild(sourceInput, subtitleStreamIndex) {
+  const safeStreamIndex = Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0
+    ? Math.floor(subtitleStreamIndex)
+    : -1;
+  if (safeStreamIndex < 0) {
+    return Promise.resolve("");
+  }
+
+  const cacheKey = buildSubtitleCacheKey(sourceInput, safeStreamIndex);
+  const inFlight = inFlightSubtitleVttBuilds.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const buildTask = (async () => {
+    await ensureHlsCacheDirectory();
+    const subtitleText = await extractSubtitleVttText(sourceInput, safeStreamIndex);
+    if (String(subtitleText || "").trim()) {
+      await Bun.write(buildSubtitleCachePath(sourceInput, safeStreamIndex), subtitleText);
+    }
+    return subtitleText;
+  })()
+    .catch(() => "")
+    .finally(() => {
+      inFlightSubtitleVttBuilds.delete(cacheKey);
+    });
+
+  inFlightSubtitleVttBuilds.set(cacheKey, buildTask);
+  return buildTask;
+}
+
+function prewarmSubtitleVttBuild(input, subtitleStreamIndex) {
+  const safeStreamIndex = Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0
+    ? Math.floor(subtitleStreamIndex)
+    : -1;
+  if (safeStreamIndex < 0) {
+    return;
+  }
+
+  const sourceInput = resolveTranscodeInput(input);
+  void (async () => {
+    if (await hasFreshSubtitleCacheFile(sourceInput, safeStreamIndex)) {
+      return;
+    }
+    await queueSubtitleVttBuild(sourceInput, safeStreamIndex);
+  })().catch(() => {
+    // Subtitle prewarm is best-effort.
+  });
+}
+
+async function createSubtitleVttResponse(input, subtitleStreamIndex) {
+  const sourceInput = resolveTranscodeInput(input);
+  const safeStreamIndex = Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0
+    ? Math.floor(subtitleStreamIndex)
+    : -1;
+  if (safeStreamIndex < 0) {
+    throw new Error("Missing or invalid subtitle stream index.");
+  }
+
+  if (await hasFreshSubtitleCacheFile(sourceInput, safeStreamIndex)) {
+    return new Response(Bun.file(buildSubtitleCachePath(sourceInput, safeStreamIndex)), {
+      status: 200,
+      headers: {
+        "Content-Type": "text/vtt; charset=utf-8",
+        "Cache-Control": "public, max-age=120",
+      },
+    });
+  }
+
+  const subtitleText = await queueSubtitleVttBuild(sourceInput, safeStreamIndex);
   if (!String(subtitleText || "").trim()) {
     return new Response("WEBVTT\n\n", {
       status: 200,
@@ -1298,7 +1885,6 @@ async function createSubtitleVttResponse(input, subtitleStreamIndex) {
     });
   }
 
-  await Bun.write(subtitlePath, subtitleText);
   return new Response(subtitleText, {
     status: 200,
     headers: {
@@ -1313,6 +1899,7 @@ async function createFfmpegProxyResponse(
   request,
   startSeconds = 0,
   audioStreamIndex = -1,
+  subtitleStreamIndex = -1,
   manualAudioSyncMs = 0,
 ) {
   const source = resolveTranscodeInput(input);
@@ -1322,33 +1909,37 @@ async function createFfmpegProxyResponse(
   const safeAudioStreamIndex = Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0
     ? Math.floor(audioStreamIndex)
     : -1;
+  const safeSubtitleStreamIndex = Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0
+    ? Math.floor(subtitleStreamIndex)
+    : -1;
   const safeManualAudioSyncMs = normalizeAudioSyncMs(manualAudioSyncMs);
-  let audioDelayMs = 0;
-  try {
-    const probe = await probeMediaTracks(source);
-    const videoStart = Number(probe?.videoStartTimeSeconds || 0);
-    const videoBFrameLead = Number(probe?.videoBFrameLeadSeconds || 0);
-    const videoFrameRateFps = Number(probe?.videoFrameRateFps || 0);
-    const videoBFrames = Number(probe?.videoBFrames || 0);
-    const videoCodec = String(probe?.videoCodec || "").toLowerCase();
-    const audioTracks = Array.isArray(probe?.audioTracks) ? probe.audioTracks : [];
-    const selectedAudioTrack = audioTracks.find((track) => Number(track?.streamIndex) === safeAudioStreamIndex)
-      || audioTracks[0]
-      || null;
-    const audioStart = Number(selectedAudioTrack?.startTimeSeconds || 0);
-    const timestampOffsetSeconds = videoStart - audioStart;
-    let offsetSeconds = Math.max(timestampOffsetSeconds, videoBFrameLead);
-    if (videoBFrames > 0 && videoFrameRateFps > 0) {
-      const safetyOffset = (videoBFrames + 1) / videoFrameRateFps;
-      offsetSeconds = Math.max(offsetSeconds, safetyOffset);
+  let autoAudioDelayMs = 0;
+  if (AUTO_AUDIO_SYNC_ENABLED) {
+    try {
+      const probe = await probeMediaTracks(source);
+      const videoStart = Number(probe?.videoStartTimeSeconds || 0);
+      const videoBFrameLead = Number(probe?.videoBFrameLeadSeconds || 0);
+      const videoFrameRateFps = Number(probe?.videoFrameRateFps || 0);
+      const videoBFrames = Number(probe?.videoBFrames || 0);
+      const audioTracks = Array.isArray(probe?.audioTracks) ? probe.audioTracks : [];
+      const selectedAudioTrack = audioTracks.find((track) => Number(track?.streamIndex) === safeAudioStreamIndex)
+        || audioTracks[0]
+        || null;
+      const audioStart = Number(selectedAudioTrack?.startTimeSeconds || 0);
+      const timestampOffsetSeconds = videoStart - audioStart;
+      let offsetSeconds = Math.max(timestampOffsetSeconds, videoBFrameLead);
+      if (videoBFrames > 0 && videoFrameRateFps > 0) {
+        const safetyOffset = (videoBFrames + 1) / videoFrameRateFps;
+        offsetSeconds = Math.max(offsetSeconds, safetyOffset);
+      }
+      if (Number.isFinite(offsetSeconds) && offsetSeconds > 0.01 && offsetSeconds < 1.5) {
+        autoAudioDelayMs = Math.round((offsetSeconds + 0.22) * 1000);
+      }
+    } catch {
+      autoAudioDelayMs = 0;
     }
-    if (Number.isFinite(offsetSeconds) && offsetSeconds > 0.01 && offsetSeconds < 1.5) {
-      audioDelayMs = Math.round((offsetSeconds + 0.22) * 1000);
-    }
-  } catch {
-    audioDelayMs = 0;
   }
-  audioDelayMs = Math.max(0, Math.min(2500, audioDelayMs + safeManualAudioSyncMs));
+  const totalAudioSyncMs = Math.max(-2500, Math.min(2500, autoAudioDelayMs + safeManualAudioSyncMs));
 
   const ffmpegArgs = [
     "ffmpeg",
@@ -1367,22 +1958,41 @@ async function createFfmpegProxyResponse(
     "0:v:0",
     "-map",
     safeAudioStreamIndex >= 0 ? `0:${safeAudioStreamIndex}?` : "0:a:0?",
-    "-sn",
+  ];
+  if (safeSubtitleStreamIndex >= 0) {
+    proxyArgs.push("-map", `0:${safeSubtitleStreamIndex}?`);
+  } else {
+    proxyArgs.push("-sn");
+  }
+  if (totalAudioSyncMs > 0) {
+    proxyArgs.push("-af", `adelay=${totalAudioSyncMs}:all=1`);
+  } else if (totalAudioSyncMs < 0) {
+    const advanceSeconds = (Math.abs(totalAudioSyncMs) / 1000).toFixed(3).replace(/\.?0+$/, "");
+    proxyArgs.push("-af", `atrim=start=${advanceSeconds},asetpts=PTS-STARTPTS`);
+  }
+  proxyArgs.push(
     "-c:v",
     "copy",
     "-c:a",
     "aac",
     "-b:a",
     "192k",
+  );
+  if (safeSubtitleStreamIndex >= 0) {
+    proxyArgs.push(
+      "-c:s",
+      "mov_text",
+      "-disposition:s:0",
+      "default",
+    );
+  }
+  proxyArgs.push(
     "-movflags",
     "frag_keyframe+empty_moov+faststart",
     "-f",
     "mp4",
     "pipe:1",
-  ];
-  if (audioDelayMs > 0) {
-    proxyArgs.splice(9, 0, "-af", `adelay=${audioDelayMs}:all=1`);
-  }
+  );
 
   const ffmpeg = Bun.spawn(
     [
@@ -1414,8 +2024,13 @@ async function createFfmpegProxyResponse(
     headers: {
       "Content-Type": "video/mp4",
       "Cache-Control": "no-store",
-      "X-Audio-Delay-Ms": String(audioDelayMs),
+      "X-Audio-Shift-Ms": String(totalAudioSyncMs),
+      "X-Audio-Delay-Ms": String(Math.max(0, totalAudioSyncMs)),
+      "X-Audio-Advance-Ms": String(Math.max(0, -totalAudioSyncMs)),
+      "X-Auto-Audio-Delay-Ms": String(autoAudioDelayMs),
       "X-Manual-Audio-Sync-Ms": String(safeManualAudioSyncMs),
+      "X-Subtitle-Stream-Index": String(safeSubtitleStreamIndex),
+      "X-Auto-Audio-Sync-Enabled": AUTO_AUDIO_SYNC_ENABLED ? "1" : "0",
     },
   });
 }
@@ -1425,6 +2040,7 @@ async function createRemuxResponse(
   request,
   startSeconds = 0,
   audioStreamIndex = -1,
+  subtitleStreamIndex = -1,
   manualAudioSyncMs = 0,
 ) {
   return createFfmpegProxyResponse(
@@ -1432,6 +2048,7 @@ async function createRemuxResponse(
     request,
     startSeconds,
     audioStreamIndex,
+    subtitleStreamIndex,
     manualAudioSyncMs,
   );
 }
@@ -2124,7 +2741,13 @@ function normalizeResolvedSourceForSoftwareDecode(source, {
     return normalized;
   }
 
-  if (!shouldPreferSoftwareDecodeSource(currentPlayable, normalized.filename)) {
+  const hasExplicitAudioSelection = Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0;
+  const hasExplicitSubtitleSelection = Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0;
+  if (
+    !hasExplicitAudioSelection
+    && !hasExplicitSubtitleSelection
+    && !shouldPreferSoftwareDecodeSource(currentPlayable, normalized.filename)
+  ) {
     return normalized;
   }
 
@@ -2135,6 +2758,7 @@ function normalizeResolvedSourceForSoftwareDecode(source, {
   const existingFallbacks = Array.isArray(normalized.fallbackUrls) ? [...normalized.fallbackUrls] : [];
   const preferredRemux = buildRemuxProxyUrl(sourceInput, {
     audioStreamIndex,
+    subtitleStreamIndex,
   });
   const preferredPrimary = preferredRemux;
   if (!preferredPrimary) {
@@ -2466,27 +3090,41 @@ function prunePersistentCaches() {
 }
 
 function clearPersistentCaches() {
-  if (!persistentCacheDb) {
-    return;
+  if (persistentCacheDb) {
+    try {
+      persistentCacheDb.exec(`
+        DELETE FROM resolved_stream_cache;
+        DELETE FROM movie_quick_start_cache;
+        DELETE FROM tmdb_response_cache;
+        DELETE FROM playback_sessions;
+        DELETE FROM source_health_stats;
+        DELETE FROM media_probe_cache;
+        DELETE FROM title_track_preferences;
+      `);
+    } catch {
+      // Ignore persistent cache clear failures.
+    }
   }
 
-  try {
-    persistentCacheDb.exec(`
-      DELETE FROM resolved_stream_cache;
-      DELETE FROM movie_quick_start_cache;
-      DELETE FROM tmdb_response_cache;
-      DELETE FROM playback_sessions;
-      DELETE FROM source_health_stats;
-      DELETE FROM media_probe_cache;
-      DELETE FROM title_track_preferences;
-    `);
-  } catch {
-    // Ignore persistent cache clear failures.
+  for (const job of hlsTranscodeJobs.values()) {
+    terminateHlsTranscodeJob(job);
   }
+  hlsTranscodeJobs.clear();
 
   void rm(HLS_CACHE_DIR, { recursive: true, force: true }).catch(() => {
     // Ignore HLS cache cleanup failures.
   });
+}
+
+function pruneIdleHlsTranscodeJobs(now = Date.now()) {
+  for (const [jobKey, job] of hlsTranscodeJobs.entries()) {
+    const inactiveForMs = now - Number(job?.lastAccessedAt || 0);
+    const finishedForMs = job?.finishedAt ? now - Number(job.finishedAt) : 0;
+    if (inactiveForMs > HLS_TRANSCODE_IDLE_MS || (job?.exited && finishedForMs > HLS_SEGMENT_STALE_MS)) {
+      terminateHlsTranscodeJob(job);
+      hlsTranscodeJobs.delete(jobKey);
+    }
+  }
 }
 
 async function pruneHlsCacheFiles() {
@@ -2921,6 +3559,7 @@ function sweepCaches() {
   trimCacheEntries(resolvedStreamCache, RESOLVED_STREAM_CACHE_MAX_ENTRIES);
   trimCacheEntries(rdTorrentLookupCache, RD_TORRENT_LOOKUP_CACHE_MAX_ENTRIES);
   prunePersistentCaches();
+  pruneIdleHlsTranscodeJobs();
   void pruneHlsCacheFiles();
 }
 
@@ -2979,6 +3618,7 @@ function getCacheDebugStats() {
         movieQuickStartMaxEntries: MOVIE_QUICK_START_PERSIST_MAX_ENTRIES,
       },
       inFlightMovieResolves: inFlightMovieResolves.size,
+      hlsTranscodeJobs: hlsTranscodeJobs.size,
     },
     stats: {
       tmdbResponse: {
@@ -3550,6 +4190,13 @@ function attachPlaybackSessionToResolvedMovie(result, tmdbMovieId, preferredAudi
     return null;
   }
 
+  if (!PLAYBACK_SESSIONS_ENABLED) {
+    return {
+      ...cloned,
+      session: null,
+    };
+  }
+
   const normalizedTmdbId = String(tmdbMovieId || cloned.metadata?.tmdbId || "").trim();
   const normalizedQuality = normalizePreferredStreamQuality(preferredQuality);
   const sessionKey = normalizedTmdbId
@@ -3687,6 +4334,9 @@ function deletePersistedPlaybackSession(sessionKey) {
 }
 
 function persistPlaybackSession(sessionKey, resolvedValue, context = {}) {
+  if (!PLAYBACK_SESSIONS_ENABLED) {
+    return;
+  }
   if (!persistentCacheDb || !sessionKey || !resolvedValue?.playableUrl) {
     return;
   }
@@ -3911,6 +4561,10 @@ function updatePersistedPlaybackSessionProgress(sessionKey, {
 }
 
 async function getReusablePlaybackSession(tmdbMovieId, context = {}) {
+  if (!PLAYBACK_SESSIONS_ENABLED) {
+    cacheStats.playbackSessionMisses += 1;
+    return null;
+  }
   const normalizedTmdbId = String(tmdbMovieId || "").trim();
   const normalizedLang = normalizePreferredAudioLang(context.preferredAudioLang);
   const preferredQuality = normalizePreferredStreamQuality(context.preferredQuality);
@@ -3983,6 +4637,7 @@ async function getReusablePlaybackSession(tmdbMovieId, context = {}) {
   };
   let selectedAudioStreamIndex = -1;
   let selectedSubtitleStreamIndex = -1;
+  const forceAudioStreamMapping = normalizedLang !== "auto";
   try {
     tracks = await probeMediaTracks(sourceInput, {
       sourceHash: session.sourceHash,
@@ -3990,7 +4645,9 @@ async function getReusablePlaybackSession(tmdbMovieId, context = {}) {
     });
     const audioTrack = chooseAudioTrackFromProbe(tracks, normalizedLang);
     const subtitleTrack = chooseSubtitleTrackFromProbe(tracks, preferredSubtitleLang);
-    selectedAudioStreamIndex = Number.isInteger(audioTrack?.streamIndex) ? audioTrack.streamIndex : -1;
+    selectedAudioStreamIndex = forceAudioStreamMapping && Number.isInteger(audioTrack?.streamIndex)
+      ? audioTrack.streamIndex
+      : -1;
     selectedSubtitleStreamIndex = Number.isInteger(subtitleTrack?.streamIndex) ? subtitleTrack.streamIndex : -1;
   } catch {
     // Probe data is optional for session reuse.
@@ -4345,6 +5002,7 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
       };
       let selectedAudioStreamIndex = -1;
       let selectedSubtitleStreamIndex = -1;
+      const forceAudioStreamMapping = preferredAudioLang !== "auto";
       try {
         tracks = await probeMediaTracks(sourceInput, {
           sourceHash: resolved.sourceHash,
@@ -4352,7 +5010,7 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
         });
         const audioTrack = chooseAudioTrackFromProbe(tracks, preferredAudioLang);
         const subtitleTrack = chooseSubtitleTrackFromProbe(tracks, preferredSubtitleLang);
-        selectedAudioStreamIndex = Number.isInteger(audioTrack?.streamIndex)
+        selectedAudioStreamIndex = forceAudioStreamMapping && Number.isInteger(audioTrack?.streamIndex)
           ? audioTrack.streamIndex
           : -1;
         selectedSubtitleStreamIndex = Number.isInteger(subtitleTrack?.streamIndex)
@@ -4411,9 +5069,25 @@ async function handleApi(url, request) {
   }
 
   if (url.pathname === "/api/config") {
+    const ffmpeg = await getFfmpegCapabilities();
     return json({
       realDebridConfigured: Boolean(REAL_DEBRID_TOKEN),
       tmdbConfigured: Boolean(TMDB_API_KEY),
+      playbackSessionsEnabled: PLAYBACK_SESSIONS_ENABLED,
+      autoAudioSyncEnabled: AUTO_AUDIO_SYNC_ENABLED,
+      hlsHwaccel: {
+        requested: HLS_HWACCEL_MODE,
+        effective: ffmpeg.effectiveHlsHwaccel,
+      },
+    });
+  }
+
+  if (url.pathname === "/api/health") {
+    const ffmpeg = await getFfmpegCapabilities(url.searchParams.get("refresh") === "1");
+    return json({
+      ok: true,
+      uptimeSeconds: Math.floor((Date.now() - SERVER_STARTED_AT) / 1000),
+      ffmpeg,
     });
   }
 
@@ -4469,6 +5143,11 @@ async function handleApi(url, request) {
       preferredQuality,
       preferredSubtitleLang,
     });
+    const resolvedSourceInput = String(resolved?.sourceInput || extractPlayableSourceInput(resolved?.playableUrl || "")).trim();
+    const selectedSubtitleStreamIndex = Number(resolved?.selectedSubtitleStreamIndex || -1);
+    if (resolvedSourceInput && Number.isFinite(selectedSubtitleStreamIndex) && selectedSubtitleStreamIndex >= 0) {
+      prewarmSubtitleVttBuild(resolvedSourceInput, selectedSubtitleStreamIndex);
+    }
 
     return json(resolved);
   }
@@ -4527,6 +5206,13 @@ async function handleApi(url, request) {
   }
 
   if (url.pathname === "/api/session/progress") {
+    if (!PLAYBACK_SESSIONS_ENABLED) {
+      return json({
+        ok: true,
+        disabled: true,
+        session: null,
+      });
+    }
     if (request.method !== "POST") {
       return json({ error: "Method not allowed. Use POST." }, 405);
     }
@@ -4638,16 +5324,27 @@ async function handleApi(url, request) {
     const input = (url.searchParams.get("input") || "").trim();
     const rawStart = Number(url.searchParams.get("start") || 0);
     const rawAudioStream = Number(url.searchParams.get("audioStream") || -1);
+    const rawSubtitleStream = Number(url.searchParams.get("subtitleStream") || -1);
     const rawAudioSyncMs = Number(url.searchParams.get("audioSyncMs") || 0);
     const startSeconds = Number.isFinite(rawStart) && rawStart > 0 ? rawStart : 0;
     const audioStreamIndex = Number.isFinite(rawAudioStream) && rawAudioStream >= 0
       ? Math.floor(rawAudioStream)
       : -1;
+    const subtitleStreamIndex = Number.isFinite(rawSubtitleStream) && rawSubtitleStream >= 0
+      ? Math.floor(rawSubtitleStream)
+      : -1;
     const audioSyncMs = normalizeAudioSyncMs(rawAudioSyncMs);
     if (!input) {
       return json({ error: "Missing input query parameter." }, 400);
     }
-    return createRemuxResponse(input, request, startSeconds, audioStreamIndex, audioSyncMs);
+    return createRemuxResponse(
+      input,
+      request,
+      startSeconds,
+      audioStreamIndex,
+      subtitleStreamIndex,
+      audioSyncMs,
+    );
   }
 
   return null;

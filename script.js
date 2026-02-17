@@ -32,12 +32,8 @@ const tmdbDetailsCache = new Map();
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 const AUDIO_LANG_PREF_KEY_PREFIX = "netflix-audio-lang:movie:";
 const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
-const AUDIO_SYNC_PREF_KEY = "netflix-audio-sync-ms-v2";
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de"]);
 const supportedStreamQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
-const AUDIO_SYNC_MIN_MS = 0;
-const AUDIO_SYNC_MAX_MS = 1500;
-const DEFAULT_AUDIO_SYNC_MS = 800;
 
 function getStoredAudioLangForTmdbMovie(tmdbId) {
   const normalizedTmdbId = String(tmdbId || "").trim();
@@ -78,25 +74,6 @@ function getStoredStreamQualityPreference() {
     return normalizeStreamQualityPreference(raw);
   } catch {
     return "auto";
-  }
-}
-
-function normalizeAudioSyncMs(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 0;
-  const clamped = Math.max(AUDIO_SYNC_MIN_MS, Math.min(AUDIO_SYNC_MAX_MS, Math.round(parsed)));
-  return clamped;
-}
-
-function getStoredAudioSyncMs() {
-  try {
-    const raw = localStorage.getItem(AUDIO_SYNC_PREF_KEY);
-    if (raw === null || raw === "") {
-      return DEFAULT_AUDIO_SYNC_MS;
-    }
-    return normalizeAudioSyncMs(raw);
-  } catch {
-    return DEFAULT_AUDIO_SYNC_MS;
   }
 }
 
@@ -326,7 +303,6 @@ function openPlayerPage({ title, episode, src, tmdbId, mediaType, year }) {
     title: title || "Title",
     episode: episode || "Now Playing",
   });
-  const audioSyncMs = getStoredAudioSyncMs();
 
   if (src) {
     params.set("src", src);
@@ -353,10 +329,6 @@ function openPlayerPage({ title, episode, src, tmdbId, mediaType, year }) {
     if (preferredQuality !== "auto") {
       params.set("quality", preferredQuality);
     }
-  }
-
-  if (audioSyncMs > 0) {
-    params.set("audioSyncMs", String(audioSyncMs));
   }
 
   if (!src && !tmdbId) {

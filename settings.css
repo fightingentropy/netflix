@@ -37,8 +37,9 @@ body {
 }
 
 .settings-logo {
-  width: 110px;
-  height: auto;
+  width: 30px;
+  height: 46px;
+  object-fit: contain;
 }
 
 .settings-back-link {

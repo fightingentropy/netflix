@@ -28,7 +28,6 @@ const singleClickToggleDelayMs = 220;
 const seekLoadingTimeoutMs = 9000;
 
 let isDraggingSeek = false;
-let lastSavedAt = 0;
 let speedPopoverCloseTimeout = null;
 let audioPopoverCloseTimeout = null;
 let streamStallRecoveryTimeout = null;
@@ -77,19 +76,15 @@ const hasAudioLangParam = params.has("audioLang");
 const audioLangParam = (params.get("audioLang") || "auto").trim().toLowerCase();
 const hasQualityParam = params.has("quality");
 const qualityParam = (params.get("quality") || "auto").trim().toLowerCase();
-const hasAudioSyncParam = params.has("audioSyncMs");
-const audioSyncParam = params.get("audioSyncMs");
 const subtitleLangParam = (params.get("subtitleLang") || "").trim().toLowerCase();
 const hasExplicitSource = Boolean(src);
 const isTmdbMoviePlayback = Boolean(!hasExplicitSource && tmdbId && mediaType === "movie");
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de", "it", "pt", "ja", "ko", "zh", "nl", "ro"]);
 const AUDIO_LANG_PREF_KEY_PREFIX = "netflix-audio-lang:movie:";
 const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
-const AUDIO_SYNC_PREF_KEY = "netflix-audio-sync-ms-v2";
 const supportedQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
-const AUDIO_SYNC_MIN_MS = 0;
+const AUDIO_SYNC_MIN_MS = -1500;
 const AUDIO_SYNC_MAX_MS = 1500;
-const DEFAULT_AUDIO_SYNC_MS = 800;
 const subtitleLanguageNames = {
   off: "Off",
   en: "English",
@@ -135,18 +130,6 @@ function normalizeAudioSyncMs(value) {
   }
   const clamped = Math.max(AUDIO_SYNC_MIN_MS, Math.min(AUDIO_SYNC_MAX_MS, Math.round(parsed)));
   return clamped;
-}
-
-function getStoredAudioSyncMs() {
-  try {
-    const raw = localStorage.getItem(AUDIO_SYNC_PREF_KEY);
-    if (raw === null || raw === "") {
-      return DEFAULT_AUDIO_SYNC_MS;
-    }
-    return normalizeAudioSyncMs(raw);
-  } catch {
-    return DEFAULT_AUDIO_SYNC_MS;
-  }
 }
 
 function isRecognizedAudioLang(value) {
@@ -209,14 +192,27 @@ let preferredQuality = normalizePreferredQuality(qualityParam);
 if (isTmdbMoviePlayback && !hasQualityParam) {
   preferredQuality = getStoredPreferredQuality();
 }
-let preferredAudioSyncMs = normalizeAudioSyncMs(audioSyncParam);
-if (!hasAudioSyncParam) {
-  preferredAudioSyncMs = getStoredAudioSyncMs();
-}
+let preferredAudioSyncMs = 0;
 preferredSubtitleLang = subtitleLangParam === "off" ? "off" : subtitleLangParam;
 const sourceIdentity = src || (isTmdbMoviePlayback ? `tmdb:${tmdbId}` : "intro.mp4");
 const resumeStorageKey = `netflix-resume:${sourceIdentity}`;
-let resumeTime = Number(localStorage.getItem(resumeStorageKey) || 0);
+let resumeTime = 0;
+try {
+  localStorage.removeItem(resumeStorageKey);
+} catch {
+  // Ignore storage access issues.
+}
+
+function stripAudioSyncFromPageUrl() {
+  const nextParams = new URLSearchParams(window.location.search);
+  if (!nextParams.has("audioSyncMs")) {
+    return;
+  }
+  nextParams.delete("audioSyncMs");
+  const nextQuery = nextParams.toString();
+  const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+  window.history.replaceState(null, "", nextUrl);
+}
 
 function isResolvingSource() {
   return Boolean(resolverOverlay && !resolverOverlay.hidden);
@@ -279,7 +275,7 @@ function hasActiveSource() {
 }
 
 function canSyncPlaybackSession() {
-  return Boolean(isTmdbMoviePlayback && tmdbId);
+  return false;
 }
 
 function resetPlaybackSessionState() {
@@ -364,6 +360,28 @@ function clearSubtitleTrack() {
   subtitleTrackElement = null;
 }
 
+function hideAllSubtitleTracks() {
+  Array.from(video.textTracks || []).forEach((textTrack) => {
+    textTrack.mode = "disabled";
+  });
+}
+
+function showSubtitleTrackElement(trackElement) {
+  if (!trackElement) {
+    return;
+  }
+  hideAllSubtitleTracks();
+  const directTrack = trackElement.track;
+  if (directTrack) {
+    directTrack.mode = "showing";
+    return;
+  }
+  const fallbackTrack = Array.from(video.textTracks || []).find((textTrack) => textTrack.label === trackElement.label);
+  if (fallbackTrack) {
+    fallbackTrack.mode = "showing";
+  }
+}
+
 async function persistTrackPreferencesOnServer({
   audioLang = null,
   subtitleLang = null,
@@ -395,6 +413,7 @@ async function persistTrackPreferencesOnServer({
 
 function applySubtitleTrackByStreamIndex(streamIndex) {
   clearSubtitleTrack();
+  hideAllSubtitleTracks();
 
   const safeStreamIndex = Number.isFinite(streamIndex) ? Math.floor(streamIndex) : -1;
   if (safeStreamIndex < 0) {
@@ -403,7 +422,12 @@ function applySubtitleTrackByStreamIndex(streamIndex) {
   }
 
   const selectedTrack = availableSubtitleTracks.find((track) => Number(track?.streamIndex) === safeStreamIndex);
-  if (!selectedTrack || !selectedTrack.vttUrl) {
+  if (!selectedTrack) {
+    selectedSubtitleStreamIndex = -1;
+    return;
+  }
+
+  if (!selectedTrack.vttUrl) {
     selectedSubtitleStreamIndex = -1;
     return;
   }
@@ -413,20 +437,17 @@ function applySubtitleTrackByStreamIndex(streamIndex) {
   trackElement.kind = "subtitles";
   trackElement.label = selectedTrack.label || `${getLanguageDisplayLabel(selectedTrack.language)} subtitles`;
   trackElement.srclang = selectedTrack.language || "und";
-  trackElement.src = selectedTrack.vttUrl;
+  trackElement.src = `${selectedTrack.vttUrl}${selectedTrack.vttUrl.includes("?") ? "&" : "?"}ts=${Date.now()}`;
   trackElement.default = true;
+  trackElement.addEventListener("load", () => {
+    showSubtitleTrackElement(trackElement);
+  });
   video.appendChild(trackElement);
   subtitleTrackElement = trackElement;
-
-  trackElement.addEventListener("load", () => {
-    Array.from(video.textTracks || []).forEach((textTrack) => {
-      textTrack.mode = "disabled";
-    });
-    const loadedTrack = Array.from(video.textTracks || []).find((textTrack) => textTrack.label === trackElement.label);
-    if (loadedTrack) {
-      loadedTrack.mode = "showing";
-    }
-  });
+  showSubtitleTrackElement(trackElement);
+  window.setTimeout(() => {
+    showSubtitleTrackElement(trackElement);
+  }, 220);
 }
 
 function rebuildTrackOptionButtons() {
@@ -510,17 +531,15 @@ function shouldUseSoftwareDecode(source) {
 }
 
 function withPreferredAudioSyncForRemuxSource(source, audioSyncMs = preferredAudioSyncMs) {
-  const normalizedSync = normalizeAudioSyncMs(audioSyncMs);
-  if (normalizedSync <= 0) {
-    return source;
-  }
-
   try {
     const url = new URL(source, window.location.origin);
     if (url.pathname !== "/api/remux") {
       return source;
     }
-    if (!url.searchParams.get("audioSyncMs")) {
+    const normalizedSync = normalizeAudioSyncMs(audioSyncMs);
+    if (normalizedSync === 0) {
+      url.searchParams.delete("audioSyncMs");
+    } else {
       url.searchParams.set("audioSyncMs", String(normalizedSync));
     }
     return `${url.pathname}?${url.searchParams.toString()}`;
@@ -529,7 +548,13 @@ function withPreferredAudioSyncForRemuxSource(source, audioSyncMs = preferredAud
   }
 }
 
-function buildSoftwareDecodeUrl(source, startSeconds = 0, audioStreamIndex = -1, audioSyncMs = preferredAudioSyncMs) {
+function buildSoftwareDecodeUrl(
+  source,
+  startSeconds = 0,
+  audioStreamIndex = -1,
+  audioSyncMs = preferredAudioSyncMs,
+  subtitleStreamIndex = selectedSubtitleStreamIndex,
+) {
   const params = new URLSearchParams({ input: String(source || "") });
   if (Number.isFinite(startSeconds) && startSeconds > 0) {
     params.set("start", String(Math.floor(startSeconds)));
@@ -537,8 +562,11 @@ function buildSoftwareDecodeUrl(source, startSeconds = 0, audioStreamIndex = -1,
   if (Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0) {
     params.set("audioStream", String(Math.floor(audioStreamIndex)));
   }
+  if (Number.isFinite(subtitleStreamIndex) && subtitleStreamIndex >= 0) {
+    params.set("subtitleStream", String(Math.floor(subtitleStreamIndex)));
+  }
   const normalizedSync = normalizeAudioSyncMs(audioSyncMs);
-  if (normalizedSync > 0) {
+  if (normalizedSync !== 0) {
     params.set("audioSyncMs", String(normalizedSync));
   }
   return `/api/remux?${params.toString()}`;
@@ -566,9 +594,13 @@ function parseTranscodeSource(source) {
     const audioStreamIndex = Number.isFinite(rawAudioStreamIndex) && rawAudioStreamIndex >= 0
       ? Math.floor(rawAudioStreamIndex)
       : -1;
+    const rawSubtitleStreamIndex = Number(url.searchParams.get("subtitleStream") || -1);
+    const subtitleStreamIndex = Number.isFinite(rawSubtitleStreamIndex) && rawSubtitleStreamIndex >= 0
+      ? Math.floor(rawSubtitleStreamIndex)
+      : -1;
     const rawAudioSyncMs = Number(url.searchParams.get("audioSyncMs") || 0);
     const audioSyncMs = normalizeAudioSyncMs(rawAudioSyncMs);
-    return { input, startSeconds, audioStreamIndex, audioSyncMs };
+    return { input, startSeconds, audioStreamIndex, subtitleStreamIndex, audioSyncMs };
   } catch {
     return null;
   }
@@ -657,6 +689,7 @@ function setVideoSource(nextSource) {
           resumeAt,
           hlsSourceMeta.audioStreamIndex,
           preferredAudioSyncMs,
+          hlsSourceMeta.subtitleStreamIndex,
         );
         video.setAttribute("src", new URL(remuxFallback, window.location.origin).toString());
       } else {
@@ -672,7 +705,13 @@ function setVideoSource(nextSource) {
   if (isHlsSource) {
     const hlsMeta = parseHlsMasterSource(sourceWithAudioSync);
     if (hlsMeta?.input) {
-      const remuxFallback = buildSoftwareDecodeUrl(hlsMeta.input, 0, hlsMeta.audioStreamIndex, preferredAudioSyncMs);
+      const remuxFallback = buildSoftwareDecodeUrl(
+        hlsMeta.input,
+        0,
+        hlsMeta.audioStreamIndex,
+        preferredAudioSyncMs,
+        hlsMeta.subtitleStreamIndex,
+      );
       video.setAttribute("src", new URL(remuxFallback, window.location.origin).toString());
       video.load();
       scheduleStreamStallRecovery("Stream stalled, trying another source...");
@@ -730,11 +769,6 @@ async function resolveTmdbSourcesAndPlay() {
   if (resolvedTrackPreferenceAudio && resolvedTrackPreferenceAudio !== "auto") {
     preferredAudioLang = resolvedTrackPreferenceAudio;
     persistAudioLangPreference(preferredAudioLang);
-  }
-
-  const serverResumeTime = Number(resolved?.session?.lastPositionSeconds || 0);
-  if (Number.isFinite(serverResumeTime) && serverResumeTime > 0) {
-    resumeTime = Math.max(resumeTime, serverResumeTime);
   }
 
   rebuildTrackOptionButtons();
@@ -844,14 +878,14 @@ function syncSpeedState() {
 }
 
 function syncAudioState() {
-  const selectedAudioTrack = availableAudioTracks.find((track) => Number(track?.streamIndex) === selectedAudioStreamIndex);
-  const selectedAudioLabel = selectedAudioTrack?.label
-    || getLanguageDisplayLabel(resolvedTrackPreferenceAudio || preferredAudioLang || "auto");
   const selectedSubtitleLabel = selectedSubtitleStreamIndex >= 0
     ? (availableSubtitleTracks.find((track) => Number(track?.streamIndex) === selectedSubtitleStreamIndex)?.label
       || getLanguageDisplayLabel(preferredSubtitleLang))
     : "Off";
-  toggleAudio?.setAttribute("aria-label", `Audio (${selectedAudioLabel}), Subtitles (${selectedSubtitleLabel})`);
+  toggleAudio?.setAttribute(
+    "aria-label",
+    `Subtitles (${selectedSubtitleLabel})`,
+  );
 
   audioOptions.forEach((option) => {
     if (option.dataset.optionType === "audio-track") {
@@ -1081,29 +1115,7 @@ function syncSeekState() {
 }
 
 function persistResumeTime(force = false) {
-  const seekScaleDurationSeconds = getSeekScaleDurationSeconds();
-  if (!Number.isFinite(seekScaleDurationSeconds) || seekScaleDurationSeconds <= 0) {
-    return;
-  }
-
-  const effectiveCurrent = getEffectiveCurrentTime();
-  if (effectiveCurrent <= 0) {
-    return;
-  }
-
-  const nearEnd = seekScaleDurationSeconds - effectiveCurrent < 8;
-  if (nearEnd) {
-    localStorage.removeItem(resumeStorageKey);
-    return;
-  }
-
-  const now = Date.now();
-  if (!force && now - lastSavedAt < 2000) {
-    return;
-  }
-
-  lastSavedAt = now;
-  localStorage.setItem(resumeStorageKey, String(effectiveCurrent));
+  void force;
 }
 
 function buildPlaybackSessionProgressPayload(positionSeconds, healthState = "healthy", lastError = "", eventType = "") {
@@ -1236,6 +1248,7 @@ function seekToAbsoluteTime(targetSeconds, { showLoading = false } = {}) {
     clampedTarget,
     activeAudioStreamIndex,
     activeAudioSyncMs || preferredAudioSyncMs,
+    selectedSubtitleStreamIndex,
   ));
   if (shouldResumePlayback) {
     void tryPlay();
@@ -1305,9 +1318,6 @@ async function resolveTmdbMovieViaBackend(tmdbMovieId) {
   if (preferredSubtitleLang) {
     query.set("subtitleLang", preferredSubtitleLang);
   }
-  if (preferredAudioSyncMs > 0) {
-    query.set("audioSyncMs", String(preferredAudioSyncMs));
-  }
 
   return requestJson(`/api/resolve/movie?${query.toString()}`, {}, 95000);
 }
@@ -1331,19 +1341,6 @@ function persistQualityInUrl() {
     nextParams.delete("quality");
   } else {
     nextParams.set("quality", preferredQuality);
-  }
-
-  const nextQuery = nextParams.toString();
-  const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
-  window.history.replaceState(null, "", nextUrl);
-}
-
-function persistAudioSyncInUrl() {
-  const nextParams = new URLSearchParams(window.location.search);
-  if (preferredAudioSyncMs <= 0) {
-    nextParams.delete("audioSyncMs");
-  } else {
-    nextParams.set("audioSyncMs", String(preferredAudioSyncMs));
   }
 
   const nextQuery = nextParams.toString();
@@ -1878,12 +1875,18 @@ async function handleKeydown(event) {
   }
 
   if (event.key === "ArrowLeft") {
+    if (isInteractiveTarget(event.target)) {
+      return;
+    }
     if (hasActiveSource() && !isResolvingSource()) {
       seekToAbsoluteTime(getEffectiveCurrentTime() - 10);
     }
   }
 
   if (event.key === "ArrowRight") {
+    if (isInteractiveTarget(event.target)) {
+      return;
+    }
     if (!hasActiveSource() || isResolvingSource()) {
       return;
     }
@@ -1892,6 +1895,9 @@ async function handleKeydown(event) {
   }
 
   if (event.key.toLowerCase() === "m") {
+    if (isInteractiveTarget(event.target)) {
+      return;
+    }
     if (!hasActiveSource() || isResolvingSource()) {
       return;
     }
@@ -1901,6 +1907,9 @@ async function handleKeydown(event) {
   }
 
   if (event.key.toLowerCase() === "f") {
+    if (isInteractiveTarget(event.target)) {
+      return;
+    }
     await toggleFullscreenMode();
   }
 
@@ -1979,14 +1988,12 @@ syncPlayState();
 syncSpeedState();
 rebuildTrackOptionButtons();
 syncAudioState();
+stripAudioSyncFromPageUrl();
 if (isTmdbMoviePlayback && !hasAudioLangParam && preferredAudioLang !== "auto") {
   persistAudioLangInUrl();
 }
 if (isTmdbMoviePlayback && !hasQualityParam && preferredQuality !== "auto") {
   persistQualityInUrl();
-}
-if (!hasAudioSyncParam && preferredAudioSyncMs > 0) {
-  persistAudioSyncInUrl();
 }
 showControls();
 paintSeekProgress(seekBar.value);

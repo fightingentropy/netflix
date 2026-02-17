@@ -74,8 +74,9 @@ body.modal-open {
 }
 
 .logo {
-  width: 105px;
-  height: auto;
+  width: 28px;
+  height: 44px;
+  object-fit: contain;
 }
 
 .top-nav nav {

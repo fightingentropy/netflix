@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Netflix Player</title>
-  <link rel="icon" type="image/png" href="logo.png" />
-  <link rel="apple-touch-icon" href="logo.png" />
+  <title>Netflix</title>
+  <link rel="icon" type="image/svg+xml" href="netflix-n.svg" />
+  <link rel="apple-touch-icon" href="netflix-n.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -57,16 +57,16 @@
                   id="toggleAudio"
                   class="control-btn audio-btn"
                   type="button"
-                  aria-label="Audio language"
+                  aria-label="Subtitles"
                   aria-haspopup="listbox"
                   aria-controls="audioMenu"
                   aria-expanded="false"
                 >
                   <img src="player-control-icons/right-captions.svg" class="control-icon-image" alt="" />
                 </button>
-                <div id="audioMenu" class="speed-popover audio-popover" role="listbox" aria-label="Audio and subtitle tracks">
-                  <div class="audio-popover-grid">
-                    <section class="audio-popover-column">
+                <div id="audioMenu" class="speed-popover audio-popover" role="listbox" aria-label="Subtitle tracks">
+                  <div class="audio-popover-grid subtitles-only">
+                    <section class="audio-popover-column audio-track-column">
                       <h3 class="audio-column-title">Audio</h3>
                       <div id="audioOptions" class="audio-options">
                         <button class="audio-option" type="button" role="option" data-lang="auto" aria-selected="true">Auto</button>
