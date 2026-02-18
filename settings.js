@@ -2,6 +2,10 @@ const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
 const SUBTITLE_COLOR_PREF_KEY = "netflix-subtitle-color-pref";
 const SOURCE_MIN_SEEDERS_PREF_KEY = "netflix-source-filter-min-seeders";
 const SOURCE_ALLOWED_FORMATS_PREF_KEY = "netflix-source-filter-allowed-formats";
+const SOURCE_LANGUAGE_PREF_KEY = "netflix-source-filter-language";
+const SOURCE_RESULTS_LIMIT_PREF_KEY = "netflix-source-filter-results-limit";
+const NATIVE_PLAYBACK_MODE_PREF_KEY = "netflix-native-playback-mode";
+const REMUX_VIDEO_MODE_PREF_KEY = "netflix-remux-video-mode";
 const PROFILE_AVATAR_STYLE_PREF_KEY = "netflix-profile-avatar-style";
 const PROFILE_AVATAR_MODE_PREF_KEY = "netflix-profile-avatar-mode";
 const PROFILE_AVATAR_IMAGE_PREF_KEY = "netflix-profile-avatar-image";
@@ -10,9 +14,12 @@ const DEFAULT_SUBTITLE_COLOR = "#b8bcc3";
 const DEFAULT_AVATAR_STYLE = "blue";
 const DEFAULT_AVATAR_MODE = "preset";
 const AVATAR_OUTPUT_SIZE_PX = 180;
+const DEFAULT_SOURCE_RESULTS_LIMIT = 5;
+const MAX_SOURCE_RESULTS_LIMIT = 20;
 
 const supportedStreamQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
 const supportedSourceFormats = ["mp4", "mkv", "m3u8", "ts", "avi", "wmv"];
+const supportedSourceLanguages = ["en", "any", "fr", "es", "de", "it", "pt"];
 const supportedAvatarStyles = new Set(["blue", "crimson", "emerald", "violet", "amber"]);
 const supportedAvatarChoices = new Set([...supportedAvatarStyles, "custom"]);
 const avatarStyleClassNames = Array.from(supportedAvatarStyles).map((style) => `avatar-style-${style}`);
@@ -29,6 +36,8 @@ const avatarUploadHint = document.getElementById("avatarUploadHint");
 const clearAllCachesBtn = document.getElementById("clearAllCachesBtn");
 const cacheClearStatus = document.getElementById("cacheClearStatus");
 const sourceMinSeedersInput = document.getElementById("sourceMinSeeders");
+const sourceResultsLimitInput = document.getElementById("sourceResultsLimit");
+const sourceLanguageSelect = document.getElementById("sourceLanguage");
 const sourceFormatInputs = Array.from(document.querySelectorAll('input[name="sourceFormats"]'));
 
 let pendingCustomAvatarImage = "";
@@ -64,6 +73,18 @@ function normalizeSourceMinSeeders(value) {
   return Math.max(0, Math.min(50000, floored));
 }
 
+function normalizeSourceResultsLimit(value) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return DEFAULT_SOURCE_RESULTS_LIMIT;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_SOURCE_RESULTS_LIMIT;
+  }
+  const floored = Math.floor(parsed);
+  return Math.max(1, Math.min(MAX_SOURCE_RESULTS_LIMIT, floored));
+}
+
 function normalizeSourceFormats(value) {
   const sourceValues = Array.isArray(value)
     ? value
@@ -74,7 +95,120 @@ function normalizeSourceFormats(value) {
   const normalized = sourceValues
     .map((item) => String(item || "").trim().toLowerCase())
     .filter((item) => supportedSourceFormats.includes(item));
-  return [...new Set(normalized)];
+  const unique = [...new Set(normalized)];
+  if (unique.length && !unique.includes("mp4")) {
+    unique.unshift("mp4");
+  }
+  return unique;
+}
+
+function normalizeSourceLanguage(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "en" || normalized === "eng" || normalized === "english") {
+    return "en";
+  }
+  if (normalized === "any" || normalized === "all" || normalized === "auto" || normalized === "*") {
+    return "any";
+  }
+  if (supportedSourceLanguages.includes(normalized)) {
+    return normalized;
+  }
+  return "en";
+}
+
+function normalizeNativePlaybackMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto" || normalized === "on" || normalized === "1" || normalized === "enabled") {
+    return "auto";
+  }
+  if (normalized === "off" || normalized === "0" || normalized === "disabled" || normalized === "browser") {
+    return "off";
+  }
+  return "auto";
+}
+
+function getStoredNativePlaybackMode() {
+  try {
+    return normalizeNativePlaybackMode(localStorage.getItem(NATIVE_PLAYBACK_MODE_PREF_KEY));
+  } catch {
+    return "auto";
+  }
+}
+
+function setSelectedNativePlaybackMode(value) {
+  const normalized = normalizeNativePlaybackMode(value);
+  const input = qualityForm?.querySelector(`input[name="nativePlaybackMode"][value="${normalized}"]`);
+  if (input) {
+    input.checked = true;
+  }
+}
+
+function persistNativePlaybackMode(value) {
+  const normalized = normalizeNativePlaybackMode(value);
+  try {
+    if (normalized === "auto") {
+      localStorage.removeItem(NATIVE_PLAYBACK_MODE_PREF_KEY);
+      return normalized;
+    }
+    localStorage.setItem(NATIVE_PLAYBACK_MODE_PREF_KEY, normalized);
+    return normalized;
+  } catch {
+    return normalized;
+  }
+}
+
+function normalizeRemuxVideoMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto" || normalized === "default") {
+    return "auto";
+  }
+  if (
+    normalized === "copy"
+    || normalized === "passthrough"
+    || normalized === "direct"
+    || normalized === "streamcopy"
+  ) {
+    return "copy";
+  }
+  if (
+    normalized === "normalize"
+    || normalized === "transcode"
+    || normalized === "aggressive"
+    || normalized === "rebuild"
+  ) {
+    return "normalize";
+  }
+  return "auto";
+}
+
+function getStoredRemuxVideoMode() {
+  try {
+    return normalizeRemuxVideoMode(localStorage.getItem(REMUX_VIDEO_MODE_PREF_KEY));
+  } catch {
+    return "auto";
+  }
+}
+
+function setSelectedRemuxVideoMode(value) {
+  const normalized = normalizeRemuxVideoMode(value);
+  const input = qualityForm?.querySelector(`input[name="remuxVideoMode"][value="${normalized}"]`);
+  if (input) {
+    input.checked = true;
+  }
+}
+
+function persistRemuxVideoMode(value) {
+  const normalized = normalizeRemuxVideoMode(value);
+  try {
+    if (normalized === "auto") {
+      localStorage.removeItem(REMUX_VIDEO_MODE_PREF_KEY);
+      return normalized;
+    }
+    localStorage.setItem(REMUX_VIDEO_MODE_PREF_KEY, normalized);
+    return normalized;
+  } catch {
+    return normalized;
+  }
 }
 
 function getStoredSourceMinSeeders() {
@@ -82,6 +216,14 @@ function getStoredSourceMinSeeders() {
     return normalizeSourceMinSeeders(localStorage.getItem(SOURCE_MIN_SEEDERS_PREF_KEY));
   } catch {
     return 0;
+  }
+}
+
+function getStoredSourceResultsLimit() {
+  try {
+    return normalizeSourceResultsLimit(localStorage.getItem(SOURCE_RESULTS_LIMIT_PREF_KEY));
+  } catch {
+    return DEFAULT_SOURCE_RESULTS_LIMIT;
   }
 }
 
@@ -107,12 +249,33 @@ function getStoredSourceFormats() {
   }
 }
 
-function setSelectedSourceFilters(minSeeders = 0, allowedFormats = supportedSourceFormats) {
+function getStoredSourceLanguage() {
+  try {
+    return normalizeSourceLanguage(localStorage.getItem(SOURCE_LANGUAGE_PREF_KEY));
+  } catch {
+    return "en";
+  }
+}
+
+function setSelectedSourceFilters(
+  minSeeders = 0,
+  allowedFormats = supportedSourceFormats,
+  sourceLanguage = "en",
+  resultsLimit = DEFAULT_SOURCE_RESULTS_LIMIT,
+) {
   const safeMinSeeders = normalizeSourceMinSeeders(minSeeders);
   const formatSet = new Set(normalizeSourceFormats(allowedFormats));
+  const safeSourceLanguage = normalizeSourceLanguage(sourceLanguage);
+  const safeResultsLimit = normalizeSourceResultsLimit(resultsLimit);
 
   if (sourceMinSeedersInput) {
     sourceMinSeedersInput.value = String(safeMinSeeders);
+  }
+  if (sourceResultsLimitInput) {
+    sourceResultsLimitInput.value = String(safeResultsLimit);
+  }
+  if (sourceLanguageSelect) {
+    sourceLanguageSelect.value = safeSourceLanguage;
   }
 
   sourceFormatInputs.forEach((input) => {
@@ -128,6 +291,20 @@ function persistSourceMinSeeders(value) {
       return 0;
     }
     localStorage.setItem(SOURCE_MIN_SEEDERS_PREF_KEY, String(normalized));
+    return normalized;
+  } catch {
+    return normalized;
+  }
+}
+
+function persistSourceResultsLimit(value) {
+  const normalized = normalizeSourceResultsLimit(value);
+  try {
+    if (normalized === DEFAULT_SOURCE_RESULTS_LIMIT) {
+      localStorage.removeItem(SOURCE_RESULTS_LIMIT_PREF_KEY);
+      return normalized;
+    }
+    localStorage.setItem(SOURCE_RESULTS_LIMIT_PREF_KEY, String(normalized));
     return normalized;
   } catch {
     return normalized;
@@ -156,6 +333,34 @@ function persistSourceFormats(formats) {
   } catch {
     return safeFormats;
   }
+}
+
+function persistSourceLanguage(value) {
+  const normalized = normalizeSourceLanguage(value);
+  try {
+    if (normalized === "en") {
+      localStorage.removeItem(SOURCE_LANGUAGE_PREF_KEY);
+      return normalized;
+    }
+    localStorage.setItem(SOURCE_LANGUAGE_PREF_KEY, normalized);
+    return normalized;
+  } catch {
+    return normalized;
+  }
+}
+
+function getSourceLanguageLabel(value) {
+  const normalized = normalizeSourceLanguage(value);
+  const labels = {
+    en: "English only",
+    any: "Any language",
+    fr: "French",
+    es: "Spanish",
+    de: "German",
+    it: "Italian",
+    pt: "Portuguese",
+  };
+  return labels[normalized] || "English only";
 }
 
 function normalizeSubtitleColor(value) {
@@ -484,7 +689,13 @@ qualityForm?.addEventListener("submit", (event) => {
   const selectedQuality = normalizeStreamQualityPreference(formData.get("quality") || "auto");
   const selectedAvatarChoice = normalizeAvatarChoice(formData.get("avatarStyle") || DEFAULT_AVATAR_STYLE);
   const selectedSourceMinSeeders = normalizeSourceMinSeeders(formData.get("sourceMinSeeders") || 0);
+  const selectedSourceResultsLimit = normalizeSourceResultsLimit(
+    formData.get("sourceResultsLimit") || DEFAULT_SOURCE_RESULTS_LIMIT,
+  );
   const selectedSourceFormats = readSelectedSourceFormatsFromForm();
+  const selectedSourceLanguage = normalizeSourceLanguage(formData.get("sourceLanguage") || "en");
+  const selectedNativePlaybackMode = normalizeNativePlaybackMode(formData.get("nativePlaybackMode") || "auto");
+  const selectedRemuxVideoMode = normalizeRemuxVideoMode(formData.get("remuxVideoMode") || "auto");
 
   const savedQuality = persistSelectedQuality(selectedQuality);
   const savedSubtitleColor = persistSubtitleColorPreference(subtitleColorInput?.value);
@@ -514,8 +725,19 @@ qualityForm?.addEventListener("submit", (event) => {
   }
 
   const savedSourceMinSeeders = persistSourceMinSeeders(selectedSourceMinSeeders);
+  const savedSourceResultsLimit = persistSourceResultsLimit(selectedSourceResultsLimit);
   const savedSourceFormats = persistSourceFormats(selectedSourceFormats);
-  setSelectedSourceFilters(savedSourceMinSeeders, savedSourceFormats);
+  const savedSourceLanguage = persistSourceLanguage(selectedSourceLanguage);
+  const savedNativePlaybackMode = persistNativePlaybackMode(selectedNativePlaybackMode);
+  const savedRemuxVideoMode = persistRemuxVideoMode(selectedRemuxVideoMode);
+  setSelectedSourceFilters(
+    savedSourceMinSeeders,
+    savedSourceFormats,
+    savedSourceLanguage,
+    savedSourceResultsLimit,
+  );
+  setSelectedNativePlaybackMode(savedNativePlaybackMode);
+  setSelectedRemuxVideoMode(savedRemuxVideoMode);
 
   if (saveStatus) {
     const qualityLabel = savedQuality === "auto" ? "Auto (Best Available)" : savedQuality.toUpperCase();
@@ -523,13 +745,28 @@ qualityForm?.addEventListener("submit", (event) => {
       ? "Any format"
       : savedSourceFormats.map((value) => value.toUpperCase()).join(", ");
     const seedsLabel = savedSourceMinSeeders > 0 ? `${savedSourceMinSeeders}+ seeds` : "Any seeds";
-    saveStatus.textContent = `Saved: ${qualityLabel}, subtitles ${savedSubtitleColor.toUpperCase()}, icon ${savedAvatarChoiceLabel}, sources ${seedsLabel}, ${formatsLabel}`;
+    const resultsLabel = `top ${savedSourceResultsLimit} by seeds`;
+    const sourceLanguageLabel = getSourceLanguageLabel(savedSourceLanguage);
+    const nativePlaybackLabel = savedNativePlaybackMode === "off"
+      ? "Browser only"
+      : "Auto (mpv)";
+    const remuxModeLabel = savedRemuxVideoMode === "normalize"
+      ? "Normalize (best sync)"
+      : (savedRemuxVideoMode === "copy" ? "Copy (fastest)" : "Auto");
+    saveStatus.textContent = `Saved: ${qualityLabel}, subtitles ${savedSubtitleColor.toUpperCase()}, icon ${savedAvatarChoiceLabel}, sources ${seedsLabel}, ${resultsLabel}, ${formatsLabel}, ${sourceLanguageLabel}, playback ${nativePlaybackLabel}, remux ${remuxModeLabel}`;
   }
 });
 
 setSelectedQuality(getStoredStreamQualityPreference());
 setSelectedSubtitleColor(getStoredSubtitleColorPreference());
-setSelectedSourceFilters(getStoredSourceMinSeeders(), getStoredSourceFormats());
+setSelectedSourceFilters(
+  getStoredSourceMinSeeders(),
+  getStoredSourceFormats(),
+  getStoredSourceLanguage(),
+  getStoredSourceResultsLimit(),
+);
+setSelectedNativePlaybackMode(getStoredNativePlaybackMode());
+setSelectedRemuxVideoMode(getStoredRemuxVideoMode());
 
 const storedAvatarStyle = getStoredAvatarStylePreference();
 const storedAvatarMode = getStoredAvatarModePreference();

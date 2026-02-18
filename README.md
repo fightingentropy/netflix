@@ -85,6 +85,7 @@ Current environment variables:
   - `none | auto | videotoolbox | cuda | qsv`
   - `auto` maps to `videotoolbox` on macOS, else `none`
 - `AUTO_AUDIO_SYNC` (`0/1` style, default: `1`)
+- `REMUX_VIDEO_MODE` (`auto|copy|normalize`, default: `auto`)
 - `PLAYBACK_SESSIONS` (`0/1` style)
 - `NATIVE_PLAYBACK` (`auto|off`, default: `auto`)
 - `MPV_BINARY` (default: `mpv`)
@@ -92,6 +93,7 @@ Current environment variables:
 Operational notes:
 
 - Auto A/V correction in `/api/remux` is controlled by `AUTO_AUDIO_SYNC` and defaults to enabled when unset.
+- Aggressive remux timestamp rebuild is controlled by `REMUX_VIDEO_MODE`; `auto` normalizes MKV/WebM-like inputs by default.
 - Native playback handoff to `mpv` is attempted for remux sources when `NATIVE_PLAYBACK=auto` and `mpv` is available; browser playback remains fallback.
 - Playback session persistence can be enabled server-side via `PLAYBACK_SESSIONS`, but the current player client currently does not send session progress updates (see section 13).
 
@@ -211,10 +213,13 @@ All API routes are implemented in `server.js`.
   - body: `{ tmdbId, audioLang?, subtitleLang? }`
   - updates per-title track preferences
   - invalidates related resolve caches
+- `DELETE /api/title/preferences?tmdbId=<id>`
+  - clears per-title persisted track preferences and playback sessions
+  - invalidates related resolve caches
 
 ## 6.3 Playback APIs
 
-- `GET /api/remux?input=<url|path>&start=<sec>&audioStream=<idx>&subtitleStream=<idx>&audioSyncMs=<ms>`
+- `GET /api/remux?input=<url|path>&start=<sec>&audioStream=<idx>&subtitleStream=<idx>&audioSyncMs=<ms>&videoMode=<auto|copy|normalize>`
   - ffmpeg remux stream to fMP4
 - `GET /api/hls/master.m3u8?input=<url|path>&audioStream=<idx>`
   - HLS playlist generation
@@ -334,7 +339,9 @@ Current ffmpeg remux behavior:
 
 - input: resolved source URL/path
 - mapping:
-  - video: `0:v:0` (copy)
+  - video:
+    - `copy` mode: `0:v:0` stream copy
+    - `normalize` mode: `0:v:0` re-encode (`libx264`) with `setpts=PTS-STARTPTS` for aggressive timeline rebuild
   - audio: selected stream or default (`aac` transcode at `192k`)
   - subtitle: optional selected subtitle stream mapped and transcoded to `mov_text`
 - output:
@@ -349,6 +356,8 @@ Response headers expose sync/debug metadata:
 - `X-Manual-Audio-Sync-Ms`
 - `X-Subtitle-Stream-Index`
 - `X-Auto-Audio-Sync-Enabled`
+- `X-Remux-Video-Mode-Requested`
+- `X-Remux-Video-Mode-Resolved`
 
 ## 10.2 `/api/hls/*` Job Model
 
@@ -444,6 +453,7 @@ Additional remux timestamp normalization:
 
 - ffmpeg uses `+genpts +igndts +discardcorrupt`
 - mux output uses `-avoid_negative_ts make_zero` and zero interleave/mux delay settings
+- in `normalize` mode, video PTS is rebuilt with `setpts=PTS-STARTPTS` and H.264 re-encode for stubborn MKV/WebM drift cases
 
 ## 13. Caching and Persistence (SQLite + Memory)
 

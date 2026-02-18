@@ -74,6 +74,7 @@ const EXTERNAL_SUBTITLE_STREAM_INDEX_BASE = 2_000_000;
 const HLS_HWACCEL_MODE = normalizeHlsHwaccelMode(process.env.HLS_HWACCEL || "none");
 const AUTO_AUDIO_SYNC_ENABLED = normalizeAutoAudioSyncEnabled(process.env.AUTO_AUDIO_SYNC || "1");
 const PLAYBACK_SESSIONS_ENABLED = normalizeAutoAudioSyncEnabled(process.env.PLAYBACK_SESSIONS || "0");
+const REMUX_VIDEO_MODE = normalizeRemuxVideoMode(process.env.REMUX_VIDEO_MODE || "auto");
 const NATIVE_PLAYBACK_MODE = normalizeNativePlaybackMode(
   process.env.NATIVE_PLAYBACK || process.env.NATIVE_PLAYER_MODE || "auto",
 );
@@ -147,6 +148,8 @@ const AUDIO_LANGUAGE_TOKENS = {
   it: ["italian", " italiano", " ita "],
   pt: ["portuguese", " portugues", " por ", "pt-br", "brazilian"],
 };
+const SOURCE_LANGUAGE_FILTER_DEFAULT = "en";
+const SUPPORTED_SOURCE_LANGUAGE_FILTERS = new Set(["any", ...Object.keys(AUDIO_LANGUAGE_TOKENS)]);
 const ISO2_TO_OPENSUBTITLES_LANG = {
   en: "eng",
   fr: "fre",
@@ -184,6 +187,63 @@ const TITLE_MATCH_STOPWORDS = new Set([
   "v",
   "movie",
   "film",
+]);
+const SUBTITLE_RELEASE_NOISE_TOKENS = new Set([
+  "web",
+  "webrip",
+  "webdl",
+  "webdlt",
+  "bluray",
+  "bdrip",
+  "brrip",
+  "dvdrip",
+  "dvdr",
+  "x264",
+  "x265",
+  "h264",
+  "h265",
+  "hevc",
+  "av1",
+  "xvid",
+  "aac",
+  "ac3",
+  "eac3",
+  "dd",
+  "ddp",
+  "dts",
+  "atmos",
+  "sdr",
+  "hdr",
+  "hdr10",
+  "dv",
+  "dolby",
+  "vision",
+  "proper",
+  "repack",
+  "remux",
+  "extended",
+  "complete",
+  "internal",
+  "multi",
+  "subs",
+  "sub",
+  "subtitles",
+  "eng",
+  "english",
+  "ita",
+  "italian",
+  "es",
+  "spa",
+  "fr",
+  "de",
+  "nf",
+  "amzn",
+  "hmax",
+  "dsnp",
+  "hulu",
+  "pcok",
+  "10bit",
+  "8bit",
 ]);
 
 function initializePersistentCacheDb() {
@@ -629,13 +689,213 @@ function buildExternalSubtitleLookupLanguages(preferredSubtitleLang = "") {
   return normalized;
 }
 
+function stripKnownVideoExtension(value) {
+  return String(value || "").replace(/\.(mkv|mp4|avi|mov|wmv|m4v|webm|mpg|mpeg|ts)$/i, "");
+}
+
+function extractTailPathSegment(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const parts = raw.split(/[/\\]+/).filter(Boolean);
+  if (!parts.length) {
+    return raw;
+  }
+  return String(parts[parts.length - 1] || "");
+}
+
+function buildSubtitleTargetName(metadata = {}) {
+  const candidates = [
+    metadata?.subtitleTargetName,
+    metadata?.subtitleTargetFilePath,
+    metadata?.subtitleTargetFilename,
+    metadata?.selectedFilePath,
+    metadata?.filename,
+    metadata?.selectedFile,
+  ];
+  for (const candidate of candidates) {
+    const tail = extractTailPathSegment(candidate);
+    const cleaned = String(tail || candidate || "").trim();
+    if (cleaned) {
+      return cleaned;
+    }
+  }
+
+  const displayTitle = String(metadata?.displayTitle || "").trim();
+  if (!displayTitle) {
+    return "";
+  }
+
+  const seasonNumber = Number(metadata?.seasonNumber);
+  const episodeNumber = Number(metadata?.episodeNumber);
+  if (
+    Number.isFinite(seasonNumber)
+    && seasonNumber >= 1
+    && Number.isFinite(episodeNumber)
+    && episodeNumber >= 1
+  ) {
+    return `${displayTitle} S${String(Math.floor(seasonNumber)).padStart(2, "0")}E${String(Math.floor(episodeNumber)).padStart(2, "0")}`;
+  }
+
+  const displayYear = String(metadata?.displayYear || "").trim();
+  if (displayYear) {
+    return `${displayTitle} ${displayYear}`;
+  }
+  return displayTitle;
+}
+
+function tokenizeSubtitleReleaseForMatch(value) {
+  const normalized = normalizeTextForMatch(stripKnownVideoExtension(extractTailPathSegment(value)));
+  if (!normalized) {
+    return [];
+  }
+
+  const tokens = normalized
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => {
+      if (SUBTITLE_RELEASE_NOISE_TOKENS.has(token)) {
+        return false;
+      }
+      if (/^s\d{1,2}e\d{1,3}$/.test(token)) {
+        return true;
+      }
+      if (/^\d{1,2}x\d{1,3}$/.test(token)) {
+        return true;
+      }
+      if (/^\d{3,4}p$/.test(token)) {
+        return true;
+      }
+      if (/^(19|20)\d{2}$/.test(token)) {
+        return true;
+      }
+      if (/^\d+$/.test(token)) {
+        return false;
+      }
+      return token.length >= 3;
+    });
+
+  return [...new Set(tokens)];
+}
+
+function getSubtitleReleaseTokenWeight(token) {
+  if (/^s\d{1,2}e\d{1,3}$/.test(token) || /^\d{1,2}x\d{1,3}$/.test(token)) {
+    return 6;
+  }
+  if (/^(19|20)\d{2}$/.test(token)) {
+    return 4;
+  }
+  if (/^\d{3,4}p$/.test(token)) {
+    return 3;
+  }
+  if (token.length >= 8) {
+    return 3;
+  }
+  if (token.length >= 5) {
+    return 2;
+  }
+  return 1;
+}
+
+function extractLikelyReleaseGroupToken(value) {
+  const tail = stripKnownVideoExtension(extractTailPathSegment(value));
+  if (!tail) {
+    return "";
+  }
+
+  const bracketMatch = tail.match(/\[([a-z0-9]{2,18})\]\s*$/i);
+  const dashMatch = tail.match(/-([a-z0-9]{2,18})\s*$/i);
+  const token = String(bracketMatch?.[1] || dashMatch?.[1] || "").toLowerCase();
+  if (!token || SUBTITLE_RELEASE_NOISE_TOKENS.has(token)) {
+    return "";
+  }
+  return token;
+}
+
+function buildExternalSubtitleReleaseText(entry) {
+  return [
+    entry?.MovieReleaseName,
+    entry?.SubFileName,
+    entry?.InfoReleaseGroup,
+    entry?.MovieName,
+    entry?.MovieNameEng,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function scoreExternalSubtitleCandidate(entry, metadata = {}, subtitleTargetName = "") {
+  const releaseText = buildExternalSubtitleReleaseText(entry);
+  if (!releaseText) {
+    return 0;
+  }
+
+  const releaseTokens = tokenizeSubtitleReleaseForMatch(releaseText);
+  const releaseTokenSet = new Set(releaseTokens);
+  let score = 0;
+
+  const targetName = String(subtitleTargetName || buildSubtitleTargetName(metadata)).trim();
+  const targetTokens = tokenizeSubtitleReleaseForMatch(targetName);
+  if (targetTokens.length && releaseTokens.length) {
+    let overlapCount = 0;
+    let weightedOverlap = 0;
+    targetTokens.forEach((token) => {
+      if (!releaseTokenSet.has(token)) {
+        return;
+      }
+      overlapCount += 1;
+      weightedOverlap += getSubtitleReleaseTokenWeight(token);
+    });
+
+    if (overlapCount > 0) {
+      score += weightedOverlap * 14;
+      score += Math.round((overlapCount / targetTokens.length) * 60);
+    } else {
+      score -= 30;
+    }
+  }
+
+  const targetGroup = extractLikelyReleaseGroupToken(targetName);
+  if (targetGroup && releaseTokenSet.has(targetGroup)) {
+    score += 90;
+  }
+
+  const targetSeasonNumber = Number(metadata?.seasonNumber);
+  const targetEpisodeNumber = Number(metadata?.episodeNumber);
+  const hasTargetEpisode = Number.isFinite(targetSeasonNumber)
+    && Number.isFinite(targetEpisodeNumber)
+    && targetSeasonNumber >= 1
+    && targetEpisodeNumber >= 1;
+  if (hasTargetEpisode) {
+    const targetSignature = buildEpisodeSignature(targetSeasonNumber, targetEpisodeNumber);
+    const releaseSignatures = collectEpisodeSignatures(releaseText, targetSeasonNumber);
+    if (releaseSignatures.length) {
+      score += releaseSignatures.includes(targetSignature) ? 140 : -260;
+    }
+  }
+
+  return score;
+}
+
 function buildExternalSubtitleLookupKey(metadata, preferredSubtitleLang = "") {
-  const imdbDigits = normalizeImdbIdForLookup(metadata?.imdbId || "");
+  const imdbDigits = normalizeImdbIdForLookup(metadata?.subtitleLookupImdbId || metadata?.imdbId || "");
   if (!imdbDigits) {
     return "";
   }
   const preferred = normalizeSubtitlePreference(preferredSubtitleLang);
-  return `${imdbDigits}|${preferred || "auto"}|single-v1`;
+  const seasonNumber = Number(metadata?.seasonNumber);
+  const episodeNumber = Number(metadata?.episodeNumber);
+  const episodeScope = Number.isFinite(seasonNumber) && Number.isFinite(episodeNumber) && seasonNumber >= 1 && episodeNumber >= 1
+    ? `s${Math.floor(seasonNumber)}e${Math.floor(episodeNumber)}`
+    : "single";
+  const subtitleTargetName = buildSubtitleTargetName(metadata);
+  const subtitleTargetTokens = tokenizeSubtitleReleaseForMatch(subtitleTargetName);
+  const subtitleTargetFingerprint = subtitleTargetTokens.length
+    ? hashStableString(`subtitle-target:${subtitleTargetTokens.join(" ")}`).slice(0, 14)
+    : "generic";
+  return `${imdbDigits}|${preferred || "auto"}|${episodeScope}|${subtitleTargetFingerprint}|v3`;
 }
 
 function isExternalSubtitleTrack(track) {
@@ -730,6 +990,64 @@ function decodeSubtitleBytes(rawBytes) {
 }
 
 function normalizeSubtitleTextToVtt(rawText) {
+  const sanitizeVttBody = (input) => {
+    const lines = String(input || "").split("\n");
+    const output = [];
+    let inStyleBlock = false;
+
+    const stripCueMarkup = (line) => String(line || "")
+      .replace(/\{\\[^}]*\}/g, "") // ASS override blocks
+      .replace(/<c(\.[^>]*)?>/gi, "")
+      .replace(/<\/c>/gi, "")
+      .replace(/<v(?:\s+[^>]*)?>/gi, "")
+      .replace(/<\/v>/gi, "")
+      .replace(/<ruby>/gi, "")
+      .replace(/<\/ruby>/gi, "")
+      .replace(/<rt>/gi, "")
+      .replace(/<\/rt>/gi, "")
+      .replace(/<font[^>]*>/gi, "")
+      .replace(/<\/font>/gi, "")
+      .replace(/<span[^>]*>/gi, "")
+      .replace(/<\/span>/gi, "");
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = String(lines[index] || "");
+      const trimmed = line.trim();
+
+      if (inStyleBlock) {
+        if (!trimmed) {
+          inStyleBlock = false;
+        }
+        continue;
+      }
+
+      if (/^STYLE\b/i.test(trimmed)) {
+        inStyleBlock = true;
+        continue;
+      }
+
+      if (!trimmed) {
+        output.push("");
+        continue;
+      }
+
+      if (
+        /^WEBVTT\b/i.test(trimmed)
+        || /^NOTE\b/i.test(trimmed)
+        || /^REGION\b/i.test(trimmed)
+        || /^X-TIMESTAMP-MAP=/i.test(trimmed)
+        || trimmed.includes("-->")
+      ) {
+        output.push(line);
+        continue;
+      }
+
+      output.push(stripCueMarkup(line));
+    }
+
+    return output.join("\n");
+  };
+
   const normalized = String(rawText || "")
     .replace(/^\uFEFF/, "")
     .replace(/\r\n/g, "\n")
@@ -741,13 +1059,13 @@ function normalizeSubtitleTextToVtt(rawText) {
   }
 
   if (/^WEBVTT\b/i.test(normalized)) {
-    return `${normalized}\n`;
+    return `${sanitizeVttBody(normalized).trim()}\n`;
   }
 
-  const vttBody = normalized.replace(
+  const vttBody = sanitizeVttBody(normalized.replace(
     /(\d{2}:\d{2}(?::\d{2})?),(\d{3})/g,
     "$1.$2",
-  );
+  ));
   return `WEBVTT\n\n${vttBody}\n`;
 }
 
@@ -770,7 +1088,7 @@ async function fetchOpenSubtitlesRows(imdbDigits, language) {
 }
 
 async function fetchExternalSubtitleTracksForMovie(metadata, preferredSubtitleLang = "") {
-  const imdbDigits = normalizeImdbIdForLookup(metadata?.imdbId || "");
+  const imdbDigits = normalizeImdbIdForLookup(metadata?.subtitleLookupImdbId || metadata?.imdbId || "");
   if (!imdbDigits) {
     return [];
   }
@@ -796,6 +1114,13 @@ async function fetchExternalSubtitleTracksForMovie(metadata, preferredSubtitleLa
     if (!requestedLanguages.length) {
       return [];
     }
+    const subtitleTargetName = buildSubtitleTargetName(metadata);
+    const targetSeasonNumber = Number(metadata?.seasonNumber);
+    const targetEpisodeNumber = Number(metadata?.episodeNumber);
+    const hasTargetEpisode = Number.isFinite(targetSeasonNumber)
+      && Number.isFinite(targetEpisodeNumber)
+      && targetSeasonNumber >= 1
+      && targetEpisodeNumber >= 1;
 
     const allRows = [];
     for (const language of requestedLanguages) {
@@ -820,22 +1145,49 @@ async function fetchExternalSubtitleTracksForMovie(metadata, preferredSubtitleLa
       if (!dedupeKey) {
         return;
       }
+      if (hasTargetEpisode) {
+        const rawSeason = Number(entry?.SeriesSeason || entry?.seriesSeason || entry?.series_season || 0);
+        const rawEpisode = Number(entry?.SeriesEpisode || entry?.seriesEpisode || entry?.series_episode || 0);
+        const entrySeason = Number.isFinite(rawSeason) && rawSeason > 0 ? Math.floor(rawSeason) : 0;
+        const entryEpisode = Number.isFinite(rawEpisode) && rawEpisode > 0 ? Math.floor(rawEpisode) : 0;
+        if (
+          (entrySeason > 0 && entrySeason !== Math.floor(targetSeasonNumber))
+          || (entryEpisode > 0 && entryEpisode !== Math.floor(targetEpisodeNumber))
+        ) {
+          return;
+        }
+      }
 
       const downloads = Number(entry?.SubDownloadsCnt || 0) || 0;
       const rating = Number(entry?.SubRating || 0) || 0;
       const language = normalizeIsoLanguage(entry?.ISO639 || entry?.SubLanguageID || entry?.requestedIso2 || "");
+      const matchScore = scoreExternalSubtitleCandidate(entry, metadata, subtitleTargetName);
       const normalizedEntry = {
         providerId,
         provider: "opensubtitles",
         providerDownloadUrl: downloadUrl,
         downloads,
         rating,
+        matchScore,
         language,
         label: buildExternalSubtitleLabel(entry),
       };
 
       const existing = dedupedByFile.get(dedupeKey);
-      if (!existing || normalizedEntry.downloads > existing.downloads) {
+      if (
+        !existing
+        || normalizedEntry.matchScore > existing.matchScore
+        || (
+          normalizedEntry.matchScore === existing.matchScore
+          && (
+            normalizedEntry.downloads > existing.downloads
+            || (
+              normalizedEntry.downloads === existing.downloads
+              && normalizedEntry.rating > existing.rating
+            )
+          )
+        )
+      ) {
         dedupedByFile.set(dedupeKey, normalizedEntry);
       }
     });
@@ -847,6 +1199,9 @@ async function fetchExternalSubtitleTracksForMovie(metadata, preferredSubtitleLa
         const rightPreferred = preferredIso && right.language === preferredIso ? 1 : 0;
         if (leftPreferred !== rightPreferred) {
           return rightPreferred - leftPreferred;
+        }
+        if (left.matchScore !== right.matchScore) {
+          return right.matchScore - left.matchScore;
         }
         if (left.downloads !== right.downloads) {
           return right.downloads - left.downloads;
@@ -946,14 +1301,32 @@ async function augmentTracksWithExternalSubtitles(tracks, metadata, preferredSub
   if (!metadata?.imdbId) {
     return safeTracks;
   }
-  const hasInternalTextSubtitles = safeTracks.subtitleTracks.some((track) => (
+  const normalizedPreferred = normalizeSubtitlePreference(preferredSubtitleLang);
+  if (normalizedPreferred === "off") {
+    return safeTracks;
+  }
+  const hasEpisodeMetadata = Number.isFinite(Number(metadata?.seasonNumber))
+    && Number(metadata?.seasonNumber) >= 1
+    && Number.isFinite(Number(metadata?.episodeNumber))
+    && Number(metadata?.episodeNumber) >= 1;
+  const internalTextTracks = safeTracks.subtitleTracks.filter((track) => (
     track
     && track.isTextBased
     && !isExternalSubtitleTrack(track)
     && String(track.vttUrl || "").trim()
   ));
-  if (hasInternalTextSubtitles) {
-    return safeTracks;
+  if (!hasEpisodeMetadata) {
+    if (!normalizedPreferred && internalTextTracks.length) {
+      return safeTracks;
+    }
+    if (normalizedPreferred) {
+      const hasPreferredInternal = internalTextTracks.some((track) => (
+        normalizeIsoLanguage(track?.language || "") === normalizedPreferred
+      ));
+      if (hasPreferredInternal) {
+        return safeTracks;
+      }
+    }
   }
   try {
     const externalTracks = await fetchExternalSubtitleTracksForMovie(metadata, preferredSubtitleLang);
@@ -995,6 +1368,30 @@ function normalizeNativePlaybackMode(value) {
   }
   if (normalized === "off" || normalized === "disabled" || normalized === "0" || normalized === "false") {
     return "off";
+  }
+  return "auto";
+}
+
+function normalizeRemuxVideoMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto" || normalized === "default") {
+    return "auto";
+  }
+  if (
+    normalized === "copy"
+    || normalized === "passthrough"
+    || normalized === "direct"
+    || normalized === "streamcopy"
+  ) {
+    return "copy";
+  }
+  if (
+    normalized === "normalize"
+    || normalized === "transcode"
+    || normalized === "aggressive"
+    || normalized === "rebuild"
+  ) {
+    return "normalize";
   }
   return "auto";
 }
@@ -1549,6 +1946,8 @@ function parseProbeTracksFromFfprobePayload(payload, sourceInput) {
   const durationSeconds = Number.isFinite(formatDuration) && formatDuration > 0
     ? Math.round(formatDuration)
     : 0;
+  const formatName = String(payload?.format?.format_name || "").trim().toLowerCase();
+  const formatLongName = String(payload?.format?.format_long_name || "").trim();
 
   const audioTracks = [];
   const subtitleTracks = [];
@@ -1636,6 +2035,8 @@ function parseProbeTracksFromFfprobePayload(payload, sourceInput) {
 
   return {
     durationSeconds,
+    formatName,
+    formatLongName,
     videoStartTimeSeconds,
     videoBFrameLeadSeconds,
     videoFrameRateFps,
@@ -1719,8 +2120,42 @@ function isLikelyForcedSubtitleTrack(track) {
   );
 }
 
+function isPlayableSubtitleTrack(track) {
+  return Boolean(
+    track
+    && track.isTextBased
+    && String(track.vttUrl || "").trim(),
+  );
+}
+
+function sortSubtitleTracksByPlaybackPreference(tracks = []) {
+  return [...tracks].sort((left, right) => {
+    const leftForced = isLikelyForcedSubtitleTrack(left) ? 1 : 0;
+    const rightForced = isLikelyForcedSubtitleTrack(right) ? 1 : 0;
+    if (leftForced !== rightForced) {
+      return leftForced - rightForced;
+    }
+
+    const leftExternal = isExternalSubtitleTrack(left) ? 1 : 0;
+    const rightExternal = isExternalSubtitleTrack(right) ? 1 : 0;
+    if (leftExternal !== rightExternal) {
+      return leftExternal - rightExternal;
+    }
+
+    const leftDefault = left?.isDefault ? 0 : 1;
+    const rightDefault = right?.isDefault ? 0 : 1;
+    if (leftDefault !== rightDefault) {
+      return leftDefault - rightDefault;
+    }
+
+    return Number(left?.streamIndex || 0) - Number(right?.streamIndex || 0);
+  });
+}
+
 function chooseSubtitleTrackFromProbe(probe, preferredSubtitleLang) {
-  const subtitles = Array.isArray(probe?.subtitleTracks) ? probe.subtitleTracks : [];
+  const subtitles = Array.isArray(probe?.subtitleTracks)
+    ? probe.subtitleTracks.filter((track) => isPlayableSubtitleTrack(track))
+    : [];
   if (!subtitles.length) {
     return null;
   }
@@ -1730,39 +2165,17 @@ function chooseSubtitleTrackFromProbe(probe, preferredSubtitleLang) {
     return null;
   }
 
-  const languageMatches = subtitles.filter((track) => (
-    track.language === normalized
-    && track.isTextBased
-    && !isExternalSubtitleTrack(track)
-  ));
+  const languageMatches = subtitles.filter((track) => track.language === normalized);
   if (languageMatches.length) {
-    const nonForcedMatch = languageMatches.find((track) => !isLikelyForcedSubtitleTrack(track));
-    return nonForcedMatch || languageMatches[0];
+    return sortSubtitleTracksByPlaybackPreference(languageMatches)[0] || null;
   }
 
-  const defaultMatches = subtitles.filter((track) => (
-    track.isDefault
-    && track.isTextBased
-    && !isExternalSubtitleTrack(track)
-  ));
+  const defaultMatches = subtitles.filter((track) => track.isDefault);
   if (defaultMatches.length) {
-    const nonForcedDefault = defaultMatches.find((track) => !isLikelyForcedSubtitleTrack(track));
-    return nonForcedDefault || defaultMatches[0];
+    return sortSubtitleTracksByPlaybackPreference(defaultMatches)[0] || null;
   }
 
-  const fallbackTextTrack = subtitles.find((track) => (
-    track.isTextBased
-    && !isExternalSubtitleTrack(track)
-    && !isLikelyForcedSubtitleTrack(track)
-  ));
-  if (fallbackTextTrack) {
-    return fallbackTextTrack;
-  }
-
-  return subtitles.find((track) => (
-    track.isTextBased
-    && !isExternalSubtitleTrack(track)
-  )) || null;
+  return sortSubtitleTracksByPlaybackPreference(subtitles)[0] || null;
 }
 
 function getPersistedTitleTrackPreference(tmdbId) {
@@ -1854,6 +2267,40 @@ function persistTitleTrackPreference(tmdbId, {
     }
   } catch {
     // Ignore persistent cache write failures.
+  }
+}
+
+function deletePersistedTitleTrackPreference(tmdbId) {
+  if (!persistentCacheDb) {
+    return;
+  }
+
+  const normalizedTmdbId = String(tmdbId || "").trim();
+  if (!normalizedTmdbId) {
+    return;
+  }
+
+  try {
+    persistentCacheDb.query("DELETE FROM title_track_preferences WHERE tmdb_id = ?").run(normalizedTmdbId);
+  } catch {
+    // Ignore persistent cache delete failures.
+  }
+}
+
+function deletePersistedPlaybackSessionsForTmdb(tmdbId) {
+  if (!persistentCacheDb) {
+    return;
+  }
+
+  const normalizedTmdbId = String(tmdbId || "").trim();
+  if (!normalizedTmdbId) {
+    return;
+  }
+
+  try {
+    persistentCacheDb.query("DELETE FROM playback_sessions WHERE tmdb_id = ?").run(normalizedTmdbId);
+  } catch {
+    // Ignore persistent cache delete failures.
   }
 }
 
@@ -2636,6 +3083,7 @@ async function createFfmpegProxyResponse(
   audioStreamIndex = -1,
   subtitleStreamIndex = -1,
   manualAudioSyncMs = 0,
+  preferredVideoMode = REMUX_VIDEO_MODE,
 ) {
   const source = resolveTranscodeInput(input);
   const safeStartSeconds = Number.isFinite(startSeconds) && startSeconds > 0
@@ -2648,10 +3096,42 @@ async function createFfmpegProxyResponse(
     ? Math.floor(subtitleStreamIndex)
     : -1;
   const safeManualAudioSyncMs = normalizeAudioSyncMs(manualAudioSyncMs);
-  let autoAudioDelayMs = 0;
-  if (AUTO_AUDIO_SYNC_ENABLED) {
+  const requestedVideoMode = normalizeRemuxVideoMode(preferredVideoMode);
+  let resolvedVideoMode = requestedVideoMode;
+  const sourceLower = String(source || "").trim().toLowerCase();
+  const sourcePathLower = sourceLower.replace(/[?#].*$/, "");
+  const looksLikeMatroskaSource = (
+    sourcePathLower.includes(".mkv")
+    || sourcePathLower.includes(".mk3d")
+    || sourcePathLower.includes(".mka")
+    || sourcePathLower.includes(".webm")
+  );
+  if (requestedVideoMode === "auto" && looksLikeMatroskaSource) {
+    resolvedVideoMode = "normalize";
+  } else if (requestedVideoMode === "auto") {
+    resolvedVideoMode = "copy";
+  }
+
+  let probe = null;
+  const shouldProbe = AUTO_AUDIO_SYNC_ENABLED || requestedVideoMode === "auto";
+  if (shouldProbe) {
     try {
-      const probe = await probeMediaTracks(source);
+      probe = await probeMediaTracks(source);
+    } catch {
+      probe = null;
+    }
+  }
+
+  if (requestedVideoMode === "auto" && resolvedVideoMode !== "normalize") {
+    const probeFormat = String(probe?.formatName || "").toLowerCase();
+    if (probeFormat.includes("matroska") || probeFormat.includes("webm")) {
+      resolvedVideoMode = "normalize";
+    }
+  }
+
+  let autoAudioDelayMs = 0;
+  if (AUTO_AUDIO_SYNC_ENABLED && probe) {
+    try {
       const videoStart = Number(probe?.videoStartTimeSeconds || 0);
       const videoBFrameLead = Number(probe?.videoBFrameLeadSeconds || 0);
       const videoFrameRateFps = Number(probe?.videoFrameRateFps || 0);
@@ -2715,9 +3195,32 @@ async function createFfmpegProxyResponse(
   }
   audioFilters.push("aresample=async=1000:first_pts=0");
   proxyArgs.push("-af", audioFilters.join(","));
+  if (resolvedVideoMode === "normalize") {
+    proxyArgs.push(
+      "-vf",
+      "setpts=PTS-STARTPTS",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "21",
+      "-pix_fmt",
+      "yuv420p",
+      "-profile:v",
+      "high",
+      "-level:v",
+      "4.1",
+      "-g",
+      "48",
+    );
+  } else {
+    proxyArgs.push(
+      "-c:v",
+      "copy",
+    );
+  }
   proxyArgs.push(
-    "-c:v",
-    "copy",
     "-c:a",
     "aac",
     "-b:a",
@@ -2784,6 +3287,8 @@ async function createFfmpegProxyResponse(
       "X-Manual-Audio-Sync-Ms": String(safeManualAudioSyncMs),
       "X-Subtitle-Stream-Index": String(safeSubtitleStreamIndex),
       "X-Auto-Audio-Sync-Enabled": AUTO_AUDIO_SYNC_ENABLED ? "1" : "0",
+      "X-Remux-Video-Mode-Requested": requestedVideoMode,
+      "X-Remux-Video-Mode-Resolved": resolvedVideoMode,
     },
   });
 }
@@ -2795,6 +3300,7 @@ async function createRemuxResponse(
   audioStreamIndex = -1,
   subtitleStreamIndex = -1,
   manualAudioSyncMs = 0,
+  preferredVideoMode = REMUX_VIDEO_MODE,
 ) {
   return createFfmpegProxyResponse(
     input,
@@ -2803,6 +3309,7 @@ async function createRemuxResponse(
     audioStreamIndex,
     subtitleStreamIndex,
     manualAudioSyncMs,
+    preferredVideoMode,
   );
 }
 
@@ -2824,6 +3331,13 @@ async function serveStatic(pathname, request) {
       "Accept-Ranges": "bytes",
       "Content-Type": contentType,
     });
+    if (
+      contentType.startsWith("text/")
+      || contentType.includes("javascript")
+      || contentType.includes("json")
+    ) {
+      headers.set("Cache-Control", "no-store");
+    }
 
     const rangeHeader = request.headers.get("range") || "";
     const rangeMatch = rangeHeader.match(/bytes=(\d*)-(\d*)/);
@@ -3078,16 +3592,90 @@ function normalizeAllowedFormats(value) {
   const normalized = sourceValues
     .map((item) => String(item || "").trim().toLowerCase())
     .filter((item) => SUPPORTED_SOURCE_FORMATS.has(item));
-  return [...new Set(normalized)];
+  const unique = [...new Set(normalized)];
+  if (unique.length && !unique.includes("mp4")) {
+    unique.unshift("mp4");
+  }
+  return unique;
 }
 
-function applySourceStreamFilters(streams = [], { minSeeders = 0, allowedFormats = [] } = {}) {
+function normalizeSourceLanguageFilter(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "en" || normalized === "eng" || normalized === "english") {
+    return SOURCE_LANGUAGE_FILTER_DEFAULT;
+  }
+  if (normalized === "any" || normalized === "all" || normalized === "auto" || normalized === "*") {
+    return "any";
+  }
+  if (SUPPORTED_SOURCE_LANGUAGE_FILTERS.has(normalized)) {
+    return normalized;
+  }
+  return SOURCE_LANGUAGE_FILTER_DEFAULT;
+}
+
+function getDetectedStreamLanguages(stream) {
+  const streamTextRaw = [
+    stream?.name,
+    stream?.title,
+    stream?.description,
+    stream?.behaviorHints?.filename,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const streamText = ` ${streamTextRaw.replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ")} `;
+  const matchedLanguages = new Set();
+  if (!streamText.trim()) {
+    return matchedLanguages;
+  }
+
+  Object.entries(AUDIO_LANGUAGE_TOKENS).forEach(([lang, tokens]) => {
+    if (tokens.some((token) => {
+      const normalizedToken = String(token || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim()
+        .replace(/\s+/g, " ");
+      if (!normalizedToken) {
+        return false;
+      }
+      return streamText.includes(` ${normalizedToken} `);
+    })) {
+      matchedLanguages.add(lang);
+    }
+  });
+
+  return matchedLanguages;
+}
+
+function matchesSourceLanguageFilter(stream, sourceLanguage) {
+  const safeSourceLanguage = normalizeSourceLanguageFilter(sourceLanguage);
+  if (safeSourceLanguage === "any") {
+    return true;
+  }
+
+  const matchedLanguages = getDetectedStreamLanguages(stream);
+  if (matchedLanguages.has(safeSourceLanguage)) {
+    // "English only" (and other explicit language filters) should reject mixed-language releases.
+    return matchedLanguages.size === 1;
+  }
+
+  if (safeSourceLanguage === SOURCE_LANGUAGE_FILTER_DEFAULT && matchedLanguages.size === 0) {
+    return true;
+  }
+
+  return false;
+}
+
+function applySourceStreamFilters(streams = [], { minSeeders = 0, allowedFormats = [], sourceLanguage = SOURCE_LANGUAGE_FILTER_DEFAULT } = {}) {
   const safeMinSeeders = normalizeMinimumSeeders(minSeeders);
   const safeAllowedFormats = normalizeAllowedFormats(allowedFormats);
+  const safeSourceLanguage = normalizeSourceLanguageFilter(sourceLanguage);
   const hasSeedFilter = safeMinSeeders > 0;
   const hasFormatFilter = safeAllowedFormats.length > 0;
+  const hasLanguageFilter = safeSourceLanguage !== "any";
 
-  if (!hasSeedFilter && !hasFormatFilter) {
+  if (!hasSeedFilter && !hasFormatFilter && !hasLanguageFilter) {
     return streams;
   }
 
@@ -3101,6 +3689,9 @@ function applySourceStreamFilters(streams = [], { minSeeders = 0, allowedFormats
       if (!container || !allowedFormatSet.has(container)) {
         return false;
       }
+    }
+    if (hasLanguageFilter && !matchesSourceLanguageFilter(stream, safeSourceLanguage)) {
+      return false;
     }
     return true;
   });
@@ -3356,6 +3947,144 @@ function sortEpisodeCandidates(streams, metadata, preferredAudioLang, preferredQ
     });
 }
 
+function moveContainerCandidatesToFront(candidates = [], container = "mp4") {
+  const preferred = [];
+  const rest = [];
+  candidates.forEach((candidate) => {
+    if (isStreamLikelyContainer(candidate, container)) {
+      preferred.push(candidate);
+      return;
+    }
+    rest.push(candidate);
+  });
+  return [...preferred, ...rest];
+}
+
+function scoreContainerDefaultLanguage(stream, sourceLanguage = SOURCE_LANGUAGE_FILTER_DEFAULT) {
+  const normalizedSourceLanguage = normalizeSourceLanguageFilter(sourceLanguage);
+  if (normalizedSourceLanguage === "any") {
+    return 0;
+  }
+
+  const detected = getDetectedStreamLanguages(stream);
+  if (detected.has(normalizedSourceLanguage)) {
+    return detected.size === 1 ? 4 : 2;
+  }
+  if (detected.size === 0 && normalizedSourceLanguage === SOURCE_LANGUAGE_FILTER_DEFAULT) {
+    return 1;
+  }
+  return -5;
+}
+
+function compareContainerDefaultCandidates(left, right, {
+  sourceLanguage = SOURCE_LANGUAGE_FILTER_DEFAULT,
+} = {}) {
+  const leftLanguageScore = scoreContainerDefaultLanguage(left, sourceLanguage);
+  const rightLanguageScore = scoreContainerDefaultLanguage(right, sourceLanguage);
+  if (leftLanguageScore !== rightLanguageScore) {
+    return rightLanguageScore - leftLanguageScore;
+  }
+
+  const leftResolution = parseStreamVerticalResolution(left);
+  const rightResolution = parseStreamVerticalResolution(right);
+  if (leftResolution !== rightResolution) {
+    return rightResolution - leftResolution;
+  }
+
+  const leftSeeders = parseSeedCount(left?.title || left?.name || "");
+  const rightSeeders = parseSeedCount(right?.title || right?.name || "");
+  if (leftSeeders !== rightSeeders) {
+    return rightSeeders - leftSeeders;
+  }
+
+  return 0;
+}
+
+function pickBestContainerCandidate(
+  rankedPool = [],
+  container = "mp4",
+  {
+    sourceLanguage = SOURCE_LANGUAGE_FILTER_DEFAULT,
+  } = {},
+) {
+  const containerCandidates = rankedPool.filter((candidate) => isStreamLikelyContainer(candidate, container));
+  if (!containerCandidates.length) {
+    return null;
+  }
+
+  const sorted = [...containerCandidates].sort((left, right) => compareContainerDefaultCandidates(left, right, {
+    sourceLanguage,
+  }));
+  return sorted[0] || null;
+}
+
+function ensureAtLeastOneContainerCandidate(
+  candidates = [],
+  rankedPool = [],
+  container = "mp4",
+  limit = 10,
+  {
+    sourceLanguage = SOURCE_LANGUAGE_FILTER_DEFAULT,
+  } = {},
+) {
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 10));
+  const current = candidates.slice(0, safeLimit);
+  if (!current.length) {
+    return [];
+  }
+  if (current.some((candidate) => isStreamLikelyContainer(candidate, container))) {
+    return current;
+  }
+
+  const currentHashes = new Set(current.map((candidate) => getStreamInfoHash(candidate)).filter(Boolean));
+  const fallback = pickBestContainerCandidate(rankedPool, container, { sourceLanguage });
+  if (!fallback) {
+    return current;
+  }
+  const fallbackHash = getStreamInfoHash(fallback);
+  if (fallbackHash && currentHashes.has(fallbackHash)) {
+    return current;
+  }
+
+  const next = [...current];
+  next[next.length - 1] = fallback;
+  return next;
+}
+
+function applyMp4DefaultCandidateRule(
+  candidates = [],
+  rankedPool = [],
+  sourceHash = "",
+  limit = 10,
+  {
+    sourceLanguage = SOURCE_LANGUAGE_FILTER_DEFAULT,
+  } = {},
+) {
+  const withMp4Candidate = ensureAtLeastOneContainerCandidate(
+    candidates,
+    rankedPool,
+    "mp4",
+    limit,
+    { sourceLanguage },
+  );
+  if (!withMp4Candidate.length) {
+    return withMp4Candidate;
+  }
+  if (normalizeSourceHash(sourceHash)) {
+    return withMp4Candidate;
+  }
+
+  const bestMp4 = pickBestContainerCandidate(withMp4Candidate, "mp4", { sourceLanguage });
+  if (!bestMp4) {
+    return moveContainerCandidatesToFront(withMp4Candidate, "mp4");
+  }
+
+  return [
+    bestMp4,
+    ...withMp4Candidate.filter((candidate) => candidate !== bestMp4),
+  ];
+}
+
 function selectTopMovieCandidates(
   streams,
   metadata,
@@ -3372,8 +4101,12 @@ function selectTopMovieCandidates(
   }
   const qualityFilteredCandidates = filterStreamsByQualityPreference(filteredPool, preferredQuality);
   const sorted = sortMovieCandidates(qualityFilteredCandidates, metadata, preferredAudioLang, preferredQuality);
-  const capped = sorted.slice(0, Math.max(1, Math.floor(Number(limit) || 10)));
-  return prioritizeCandidatesBySourceHash(capped, sorted, sourceHash, Math.max(1, Math.floor(Number(limit) || 10)));
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 10));
+  const capped = sorted.slice(0, safeLimit);
+  const selectedTop = prioritizeCandidatesBySourceHash(capped, sorted, sourceHash, safeLimit);
+  return applyMp4DefaultCandidateRule(selectedTop, sorted, sourceHash, safeLimit, {
+    sourceLanguage: sourceFilters?.sourceLanguage,
+  });
 }
 
 function selectTopEpisodeCandidates(
@@ -3395,20 +4128,9 @@ function selectTopEpisodeCandidates(
   const qualityFilteredCandidates = filterStreamsByQualityPreference(filteredPool, preferredQuality);
   const sorted = sortEpisodeCandidates(qualityFilteredCandidates, metadata, preferredAudioLang, preferredQuality);
   const selectedTop = prioritizeCandidatesBySourceHash(sorted.slice(0, safeLimit), sorted, sourceHash, safeLimit);
-
-  if (preferredContainer !== "mp4") {
-    return selectedTop;
-  }
-
-  const mp4Hinted = selectedTop.filter((stream) => isStreamLikelyContainer(stream, "mp4"));
-  if (!mp4Hinted.length) {
-    return selectedTop;
-  }
-
-  return [
-    ...mp4Hinted,
-    ...selectedTop.filter((stream) => !mp4Hinted.includes(stream)),
-  ];
+  return applyMp4DefaultCandidateRule(selectedTop, sorted, sourceHash, safeLimit, {
+    sourceLanguage: sourceFilters?.sourceLanguage,
+  });
 }
 
 function hasUrlLikeContainerExtension(value, container = "mp4") {
@@ -3425,6 +4147,11 @@ function hasUrlLikeContainerExtension(value, container = "mp4") {
 }
 
 function isStreamLikelyContainer(stream, container = "mp4") {
+  const inferredContainer = inferStreamContainerLabel(stream);
+  if (inferredContainer) {
+    return inferredContainer === container;
+  }
+
   const streamText = [
     stream?.name,
     stream?.title,
@@ -3444,6 +4171,15 @@ function isStreamLikelyContainer(stream, container = "mp4") {
       return true;
     }
     if (/\.(mkv|avi|wmv|ts|m3u8)\b/.test(streamText)) {
+      return false;
+    }
+  }
+
+  if (container === "mkv") {
+    if (/\.mkv\b/.test(streamText)) {
+      return true;
+    }
+    if (/\.(mp4|avi|wmv|ts|m3u8)\b/.test(streamText)) {
       return false;
     }
   }
@@ -3654,9 +4390,10 @@ function pickVideoFileIds(files, preferredFilename, fallbackName = "") {
   }
 
   const fallbackEpisodeSignatures = collectEpisodeSignatures(fallbackName);
+  const fallbackSeasonHint = Number(fallbackEpisodeSignatures[0]?.split("x")?.[0] || 0);
   if (fallbackEpisodeSignatures.length) {
     const episodeMatchedFile = videoFiles.find((file) => {
-      const fileSignatures = collectEpisodeSignatures(String(file.path || ""));
+      const fileSignatures = collectEpisodeSignatures(String(file.path || ""), fallbackSeasonHint || null);
       if (!fileSignatures.length) {
         return false;
       }
@@ -3879,6 +4616,7 @@ function cloneResolvedSource(source) {
     filename: String(source?.filename || ""),
     sourceHash: String(source?.sourceHash || ""),
     selectedFile: String(source?.selectedFile || ""),
+    selectedFilePath: String(source?.selectedFilePath || ""),
   };
 }
 
@@ -3893,6 +4631,7 @@ function cloneResolvedMovieResult(value) {
     filename: String(value.filename || ""),
     sourceHash: String(value.sourceHash || ""),
     selectedFile: String(value.selectedFile || ""),
+    selectedFilePath: String(value.selectedFilePath || ""),
     sourceInput: String(value.sourceInput || ""),
     selectedAudioStreamIndex: Number.isFinite(Number(value.selectedAudioStreamIndex))
       ? Math.max(-1, Math.floor(Number(value.selectedAudioStreamIndex)))
@@ -3904,9 +4643,20 @@ function cloneResolvedMovieResult(value) {
       ? {
         tmdbId: String(value.metadata.tmdbId || ""),
         imdbId: String(value.metadata.imdbId || ""),
+        subtitleLookupImdbId: String(value.metadata.subtitleLookupImdbId || ""),
         displayTitle: String(value.metadata.displayTitle || ""),
         displayYear: String(value.metadata.displayYear || ""),
         runtimeSeconds: Number(value.metadata.runtimeSeconds || 0) || 0,
+        seasonNumber: Number.isFinite(Number(value.metadata.seasonNumber))
+          ? Math.max(0, Math.floor(Number(value.metadata.seasonNumber)))
+          : 0,
+        episodeNumber: Number.isFinite(Number(value.metadata.episodeNumber))
+          ? Math.max(0, Math.floor(Number(value.metadata.episodeNumber)))
+          : 0,
+        episodeTitle: String(value.metadata.episodeTitle || ""),
+        subtitleTargetName: String(value.metadata.subtitleTargetName || ""),
+        subtitleTargetFilename: String(value.metadata.subtitleTargetFilename || ""),
+        subtitleTargetFilePath: String(value.metadata.subtitleTargetFilePath || ""),
       }
       : {},
     tracks: value.tracks && typeof value.tracks === "object"
@@ -5064,6 +5814,15 @@ function setCachedResolvedStream(cacheKey, value) {
   setPersistedResolvedStreamEntry(cacheKey, entry);
 }
 
+function invalidateCachedResolvedStream(cacheKey) {
+  if (!cacheKey) {
+    return;
+  }
+  resolvedStreamCache.delete(cacheKey);
+  deletePersistedResolvedStreamEntry(cacheKey);
+  cacheStats.resolvedStreamInvalidated += 1;
+}
+
 function getCachedRdTorrentLookup(infoHash) {
   const normalizedHash = String(infoHash || "").trim().toLowerCase();
   if (!normalizedHash) {
@@ -5743,7 +6502,17 @@ async function getReusablePlaybackSession(tmdbMovieId, context = {}) {
   } catch {
     // Probe data is optional for session reuse.
   }
-  tracks = await augmentTracksWithExternalSubtitles(tracks, session.metadata || {}, preferredSubtitleLang);
+  const subtitleMetadata = {
+    ...(session.metadata || {}),
+    subtitleTargetName: String(session.metadata?.subtitleTargetName || session.filename || "").trim(),
+    subtitleTargetFilename: String(session.metadata?.subtitleTargetFilename || session.filename || "").trim(),
+    subtitleTargetFilePath: String(session.metadata?.subtitleTargetFilePath || "").trim(),
+  };
+  tracks = await augmentTracksWithExternalSubtitles(tracks, subtitleMetadata, preferredSubtitleLang);
+  const preferredSubtitleTrack = chooseSubtitleTrackFromProbe(tracks, preferredSubtitleLang);
+  selectedSubtitleStreamIndex = Number.isInteger(preferredSubtitleTrack?.streamIndex)
+    ? preferredSubtitleTrack.streamIndex
+    : -1;
 
   const normalizedPlayable = normalizeResolvedSourceForSoftwareDecode(
     {
@@ -5773,7 +6542,7 @@ async function getReusablePlaybackSession(tmdbMovieId, context = {}) {
       subtitleLang: preferredSubtitleLang,
       quality: preferredQuality,
     },
-    metadata: session.metadata,
+    metadata: subtitleMetadata,
     session: buildPlaybackSessionPayload(session),
   };
 }
@@ -5788,8 +6557,19 @@ async function withExternalSubtitleTracksOnResolvedMovie(result, preferredSubtit
     tracks: result?.tracks || {},
   };
   const metadata = cloned?.metadata && typeof cloned.metadata === "object" ? cloned.metadata : {};
+  const subtitleMetadata = {
+    ...metadata,
+    subtitleTargetName: String(metadata?.subtitleTargetName || cloned?.selectedFilePath || cloned?.filename || "").trim(),
+    subtitleTargetFilename: String(metadata?.subtitleTargetFilename || cloned?.filename || "").trim(),
+    subtitleTargetFilePath: String(metadata?.subtitleTargetFilePath || cloned?.selectedFilePath || "").trim(),
+  };
   const tracks = cloned?.tracks && typeof cloned.tracks === "object" ? cloned.tracks : {};
-  cloned.tracks = await augmentTracksWithExternalSubtitles(tracks, metadata, preferredSubtitleLang);
+  cloned.metadata = subtitleMetadata;
+  cloned.tracks = await augmentTracksWithExternalSubtitles(tracks, subtitleMetadata, preferredSubtitleLang);
+  const preferredSubtitleTrack = chooseSubtitleTrackFromProbe(cloned.tracks, preferredSubtitleLang);
+  cloned.selectedSubtitleStreamIndex = Number.isInteger(preferredSubtitleTrack?.streamIndex)
+    ? preferredSubtitleTrack.streamIndex
+    : -1;
   return cloned;
 }
 
@@ -5800,6 +6580,7 @@ async function resolveMovieWithDedup(tmdbMovieId, context = {}) {
   const forcedSourceHash = normalizeSourceHash(context.sourceHash);
   const effectiveMinSeeders = normalizeMinimumSeeders(context.minSeeders);
   const effectiveAllowedFormats = normalizeAllowedFormats(context.allowedFormats);
+  const effectiveSourceLanguage = normalizeSourceLanguageFilter(context.sourceLanguage);
   const effectiveContext = {
     ...context,
     preferredAudioLang: effectivePreferredAudioLang,
@@ -5808,9 +6589,15 @@ async function resolveMovieWithDedup(tmdbMovieId, context = {}) {
     sourceHash: forcedSourceHash,
     minSeeders: effectiveMinSeeders,
     allowedFormats: effectiveAllowedFormats,
+    sourceLanguage: effectiveSourceLanguage,
   };
 
-  if (forcedSourceHash || effectiveMinSeeders > 0 || effectiveAllowedFormats.length) {
+  if (
+    forcedSourceHash
+    || effectiveMinSeeders > 0
+    || effectiveAllowedFormats.length
+    || effectiveSourceLanguage !== SOURCE_LANGUAGE_FILTER_DEFAULT
+  ) {
     return resolveTmdbMovieViaRealDebrid(tmdbMovieId, effectiveContext);
   }
 
@@ -5885,6 +6672,9 @@ async function resolveCandidateStream(stream, fallbackName) {
     const info = await rdFetch(`/torrents/info/${candidateTorrentId}`);
     const fileIds = pickVideoFileIds(info?.files || [], preferredFilename, fallbackName);
     const selectedFile = fileIds.length ? String(fileIds[0]) : "";
+    const selectedFilePath = fileIds.length
+      ? String((Array.isArray(info?.files) ? info.files : []).find((file) => Number(file?.id) === Number(fileIds[0]))?.path || "")
+      : "";
 
     await rdFetch(`/torrents/selectFiles/${candidateTorrentId}`, {
       method: "POST",
@@ -5988,6 +6778,7 @@ async function resolveCandidateStream(stream, fallbackName) {
         filename,
         sourceHash: infoHash,
         selectedFile,
+        selectedFilePath,
       };
       setCachedResolvedStream(cacheKey, resolvedSource);
       return resolvedSource;
@@ -6052,6 +6843,7 @@ async function fetchMovieMetadata(tmdbMovieId, { titleFallback = "", yearFallbac
   return {
     tmdbId: String(tmdbMovieId || "").trim(),
     imdbId: details.imdb_id,
+    subtitleLookupImdbId: details.imdb_id,
     displayTitle: details.title || titleFallback || "Movie",
     displayYear: details.release_date ? details.release_date.slice(0, 4) : yearFallback,
     runtimeSeconds,
@@ -6079,11 +6871,14 @@ function buildEpisodeSignature(seasonNumber, episodeNumber) {
   return `${safeSeason}x${safeEpisode}`;
 }
 
-function collectEpisodeSignatures(rawText) {
+function collectEpisodeSignatures(rawText, seasonHint = null) {
   const text = String(rawText || "").toLowerCase();
   if (!text) {
     return [];
   }
+  const safeSeasonHint = Number.isFinite(Number(seasonHint))
+    ? Math.max(1, Math.min(99, Math.floor(Number(seasonHint))))
+    : 0;
 
   const signatures = [];
   const pushSignature = (season, episode) => {
@@ -6108,6 +6903,13 @@ function collectEpisodeSignatures(rawText) {
     pushSignature(match[1], match[2]);
   }
 
+  if (safeSeasonHint > 0) {
+    const episodeOnlyPattern = /\b(?:e|ep|episode)\s*[-_. ]?0*(\d{1,3})\b/g;
+    for (const match of text.matchAll(episodeOnlyPattern)) {
+      pushSignature(safeSeasonHint, match[1]);
+    }
+  }
+
   return [...new Set(signatures)];
 }
 
@@ -6130,7 +6932,7 @@ function scoreStreamEpisodeMatch(stream, seasonNumber, episodeNumber) {
   }
 
   const targetSignature = buildEpisodeSignature(seasonNumber, episodeNumber);
-  const signatures = collectEpisodeSignatures(streamText);
+  const signatures = collectEpisodeSignatures(streamText, seasonNumber);
   if (!signatures.length) {
     return 0;
   }
@@ -6149,9 +6951,9 @@ function doesFilenameLikelyMatchTvEpisode(filename, showTitle, showYear, seasonN
   }
 
   const targetSignature = buildEpisodeSignature(seasonNumber, episodeNumber);
-  const episodeSignatures = collectEpisodeSignatures(normalizedFilename);
-  if (episodeSignatures.length && !episodeSignatures.includes(targetSignature)) {
-    return false;
+  const episodeSignatures = collectEpisodeSignatures(normalizedFilename, seasonNumber);
+  if (episodeSignatures.length) {
+    return episodeSignatures.includes(targetSignature);
   }
 
   const titleTokens = tokenizeTitleForMatch(showTitle);
@@ -6201,15 +7003,18 @@ async function fetchTvEpisodeMetadata(
 ) {
   const safeSeasonNumber = normalizeEpisodeOrdinal(seasonNumber, 1);
   const safeEpisodeNumber = normalizeEpisodeOrdinal(episodeNumber, 1);
-  const [seriesDetails, episodeDetails, externalIds] = await Promise.all([
+  const [seriesDetails, episodeDetails, externalIds, episodeExternalIds] = await Promise.all([
     tmdbFetch(`/tv/${tmdbTvId}`),
     tmdbFetch(`/tv/${tmdbTvId}/season/${safeSeasonNumber}/episode/${safeEpisodeNumber}`),
-    tmdbFetch(`/tv/${tmdbTvId}/external_ids`),
+    tmdbFetch(`/tv/${tmdbTvId}/external_ids`).catch(() => ({})),
+    tmdbFetch(`/tv/${tmdbTvId}/season/${safeSeasonNumber}/episode/${safeEpisodeNumber}/external_ids`).catch(() => ({})),
   ]);
-  const imdbId = String(externalIds?.imdb_id || "").trim();
-  if (!imdbId) {
+  const seriesImdbId = String(externalIds?.imdb_id || "").trim();
+  if (!seriesImdbId) {
     throw new Error("This TMDB series does not expose an IMDb id.");
   }
+  const episodeImdbId = String(episodeExternalIds?.imdb_id || "").trim();
+  const subtitleLookupImdbId = episodeImdbId || seriesImdbId;
 
   const runtimeMinutes = Number(episodeDetails?.runtime || seriesDetails?.episode_run_time?.[0]);
   const runtimeSeconds = Number.isFinite(runtimeMinutes) && runtimeMinutes > 0
@@ -6218,7 +7023,8 @@ async function fetchTvEpisodeMetadata(
 
   return {
     tmdbId: String(tmdbTvId || "").trim(),
-    imdbId,
+    imdbId: seriesImdbId,
+    subtitleLookupImdbId,
     displayTitle: String(seriesDetails?.name || titleFallback || "Series"),
     displayYear: seriesDetails?.first_air_date ? String(seriesDetails.first_air_date).slice(0, 4) : String(yearFallback || ""),
     runtimeSeconds,
@@ -6246,6 +7052,7 @@ async function resolveTmdbTvEpisodeViaRealDebrid(tmdbTvId, context = {}) {
   const sourceHash = normalizeSourceHash(context.sourceHash);
   const minSeeders = normalizeMinimumSeeders(context.minSeeders);
   const allowedFormats = normalizeAllowedFormats(context.allowedFormats);
+  const sourceLanguage = normalizeSourceLanguageFilter(context.sourceLanguage);
 
   const streams = await fetchTorrentioEpisodeStreams(
     metadata.imdbId,
@@ -6263,6 +7070,7 @@ async function resolveTmdbTvEpisodeViaRealDebrid(tmdbTvId, context = {}) {
     {
       minSeeders,
       allowedFormats,
+      sourceLanguage,
     },
   );
 
@@ -6274,6 +7082,12 @@ async function resolveTmdbTvEpisodeViaRealDebrid(tmdbTvId, context = {}) {
 
   const finalizeResolvedCandidate = async (resolved) => {
     const sourceInput = extractPlayableSourceInput(resolved.playableUrl);
+    const subtitleMetadata = {
+      ...metadata,
+      subtitleTargetName: String(resolved?.selectedFilePath || resolved?.filename || "").trim(),
+      subtitleTargetFilename: String(resolved?.filename || "").trim(),
+      subtitleTargetFilePath: String(resolved?.selectedFilePath || "").trim(),
+    };
     let tracks = {
       durationSeconds: metadata.runtimeSeconds || 0,
       audioTracks: [],
@@ -6298,7 +7112,11 @@ async function resolveTmdbTvEpisodeViaRealDebrid(tmdbTvId, context = {}) {
     } catch {
       // Track probing is optional; continue playback with best-effort defaults.
     }
-    tracks = await augmentTracksWithExternalSubtitles(tracks, metadata, preferredSubtitleLang);
+    tracks = await augmentTracksWithExternalSubtitles(tracks, subtitleMetadata, preferredSubtitleLang);
+    const preferredSubtitleTrack = chooseSubtitleTrackFromProbe(tracks, preferredSubtitleLang);
+    selectedSubtitleStreamIndex = Number.isInteger(preferredSubtitleTrack?.streamIndex)
+      ? preferredSubtitleTrack.streamIndex
+      : -1;
 
     const normalizedPlayable = normalizeResolvedSourceForSoftwareDecode(
       {
@@ -6317,6 +7135,7 @@ async function resolveTmdbTvEpisodeViaRealDebrid(tmdbTvId, context = {}) {
       filename: normalizedPlayable.filename || resolved.filename,
       sourceHash: resolved.sourceHash,
       selectedFile: resolved.selectedFile,
+      selectedFilePath: resolved.selectedFilePath,
       sourceInput,
       tracks,
       selectedAudioStreamIndex,
@@ -6326,7 +7145,7 @@ async function resolveTmdbTvEpisodeViaRealDebrid(tmdbTvId, context = {}) {
         subtitleLang: preferredSubtitleLang,
         quality: preferredStreamQuality,
       },
-      metadata,
+      metadata: subtitleMetadata,
     };
   };
 
@@ -6340,15 +7159,55 @@ async function resolveTmdbTvEpisodeViaRealDebrid(tmdbTvId, context = {}) {
     const candidate = orderedCandidates[index];
 
     try {
-      const fallbackName = `${metadata.displayTitle} S${String(metadata.seasonNumber).padStart(2, "0")}E${String(metadata.episodeNumber).padStart(2, "0")}`;
-      const resolved = await resolveCandidateStream(candidate, fallbackName);
-      const filenameMatchesEpisode = doesFilenameLikelyMatchTvEpisode(
-        resolved?.filename,
+      const fallbackEpisodeTitle = String(metadata.episodeTitle || "").trim();
+      const fallbackName = fallbackEpisodeTitle
+        ? `${metadata.displayTitle} S${String(metadata.seasonNumber).padStart(2, "0")}E${String(metadata.episodeNumber).padStart(2, "0")} ${fallbackEpisodeTitle}`
+        : `${metadata.displayTitle} S${String(metadata.seasonNumber).padStart(2, "0")}E${String(metadata.episodeNumber).padStart(2, "0")}`;
+      const cacheKey = buildResolvedStreamCacheKey(candidate);
+      const candidateSourceHash = normalizeSourceHash(candidate?.infoHash);
+      const isForcedCandidate = Boolean(sourceHash && candidateSourceHash && candidateSourceHash === sourceHash);
+      let resolved = await resolveCandidateStream(candidate, fallbackName);
+      let episodeMatchName = String(resolved?.selectedFilePath || resolved?.filename || "").trim();
+      let resolvedEpisodeSignatures = collectEpisodeSignatures(episodeMatchName, metadata.seasonNumber);
+      let filenameMatchesEpisode = doesFilenameLikelyMatchTvEpisode(
+        episodeMatchName,
         metadata.displayTitle,
         metadata.displayYear,
         metadata.seasonNumber,
         metadata.episodeNumber,
       );
+      const candidateConfirmsEpisode = scoreStreamEpisodeMatch(
+        candidate,
+        metadata.seasonNumber,
+        metadata.episodeNumber,
+      ) > 0;
+      if (!filenameMatchesEpisode && candidateConfirmsEpisode && isForcedCandidate) {
+        filenameMatchesEpisode = true;
+      }
+      if (!filenameMatchesEpisode && candidateConfirmsEpisode && !resolvedEpisodeSignatures.length) {
+        filenameMatchesEpisode = true;
+      }
+
+      if (!filenameMatchesEpisode && cacheKey) {
+        invalidateCachedResolvedStream(cacheKey);
+        resolved = await resolveCandidateStream(candidate, fallbackName);
+        episodeMatchName = String(resolved?.selectedFilePath || resolved?.filename || "").trim();
+        resolvedEpisodeSignatures = collectEpisodeSignatures(episodeMatchName, metadata.seasonNumber);
+        filenameMatchesEpisode = doesFilenameLikelyMatchTvEpisode(
+          episodeMatchName,
+          metadata.displayTitle,
+          metadata.displayYear,
+          metadata.seasonNumber,
+          metadata.episodeNumber,
+        );
+        if (!filenameMatchesEpisode && candidateConfirmsEpisode && isForcedCandidate) {
+          filenameMatchesEpisode = true;
+        }
+        if (!filenameMatchesEpisode && candidateConfirmsEpisode && !resolvedEpisodeSignatures.length) {
+          filenameMatchesEpisode = true;
+        }
+      }
+
       if (!filenameMatchesEpisode) {
         lastError = new Error("Resolved stream filename did not match requested episode.");
         continue;
@@ -6399,6 +7258,7 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
   const sourceHash = normalizeSourceHash(context.sourceHash);
   const minSeeders = normalizeMinimumSeeders(context.minSeeders);
   const allowedFormats = normalizeAllowedFormats(context.allowedFormats);
+  const sourceLanguage = normalizeSourceLanguageFilter(context.sourceLanguage);
 
   const streams = await fetchTorrentioMovieStreams(metadata.imdbId);
   const candidates = selectTopMovieCandidates(
@@ -6411,6 +7271,7 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
     {
       minSeeders,
       allowedFormats,
+      sourceLanguage,
     },
   );
 
@@ -6440,6 +7301,12 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
       }
 
       const sourceInput = extractPlayableSourceInput(resolved.playableUrl);
+      const subtitleMetadata = {
+        ...metadata,
+        subtitleTargetName: String(resolved?.selectedFilePath || resolved?.filename || "").trim(),
+        subtitleTargetFilename: String(resolved?.filename || "").trim(),
+        subtitleTargetFilePath: String(resolved?.selectedFilePath || "").trim(),
+      };
       let tracks = {
         durationSeconds: metadata.runtimeSeconds || 0,
         audioTracks: [],
@@ -6464,7 +7331,11 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
       } catch {
         // Track probing is optional; continue playback with best-effort defaults.
       }
-      tracks = await augmentTracksWithExternalSubtitles(tracks, metadata, preferredSubtitleLang);
+      tracks = await augmentTracksWithExternalSubtitles(tracks, subtitleMetadata, preferredSubtitleLang);
+      const preferredSubtitleTrack = chooseSubtitleTrackFromProbe(tracks, preferredSubtitleLang);
+      selectedSubtitleStreamIndex = Number.isInteger(preferredSubtitleTrack?.streamIndex)
+        ? preferredSubtitleTrack.streamIndex
+        : -1;
 
       const normalizedPlayable = normalizeResolvedSourceForSoftwareDecode(
         {
@@ -6490,7 +7361,7 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
           subtitleLang: preferredSubtitleLang,
           quality: preferredStreamQuality,
         },
-        metadata,
+        metadata: subtitleMetadata,
       };
     } catch (error) {
       lastError = error;
@@ -6527,6 +7398,7 @@ async function handleApi(url, request) {
       tmdbConfigured: Boolean(TMDB_API_KEY),
       playbackSessionsEnabled: PLAYBACK_SESSIONS_ENABLED,
       autoAudioSyncEnabled: AUTO_AUDIO_SYNC_ENABLED,
+      remuxVideoMode: REMUX_VIDEO_MODE,
       hlsHwaccel: {
         requested: HLS_HWACCEL_MODE,
         effective: ffmpeg.effectiveHlsHwaccel,
@@ -6680,6 +7552,7 @@ async function handleApi(url, request) {
     const sourceHash = normalizeSourceHash(url.searchParams.get("sourceHash"));
     const minSeeders = normalizeMinimumSeeders(url.searchParams.get("minSeeders"));
     const allowedFormats = normalizeAllowedFormats(url.searchParams.get("allowedFormats"));
+    const sourceLanguage = normalizeSourceLanguageFilter(url.searchParams.get("sourceLang"));
     const requestedLimit = Number(url.searchParams.get("limit") || 10);
     const limit = Math.max(1, Math.min(20, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 10));
 
@@ -6716,6 +7589,7 @@ async function handleApi(url, request) {
         {
           minSeeders,
           allowedFormats,
+          sourceLanguage,
         },
       );
       const sources = candidates
@@ -6745,6 +7619,7 @@ async function handleApi(url, request) {
       {
         minSeeders,
         allowedFormats,
+        sourceLanguage,
       },
     );
     const sources = candidates
@@ -6770,6 +7645,7 @@ async function handleApi(url, request) {
     const sourceHash = normalizeSourceHash(url.searchParams.get("sourceHash"));
     const minSeeders = normalizeMinimumSeeders(url.searchParams.get("minSeeders"));
     const allowedFormats = normalizeAllowedFormats(url.searchParams.get("allowedFormats"));
+    const sourceLanguage = normalizeSourceLanguageFilter(url.searchParams.get("sourceLang"));
 
     if (!/^\d+$/.test(tmdbId)) {
       return json({ error: "Missing or invalid tmdbId query parameter." }, 400);
@@ -6787,6 +7663,7 @@ async function handleApi(url, request) {
       sourceHash,
       minSeeders,
       allowedFormats,
+      sourceLanguage,
     });
     const resolvedSourceInput = String(resolved?.sourceInput || extractPlayableSourceInput(resolved?.playableUrl || "")).trim();
     const selectedSubtitleStreamIndex = Number(resolved?.selectedSubtitleStreamIndex || -1);
@@ -6827,6 +7704,7 @@ async function handleApi(url, request) {
     const sourceHash = normalizeSourceHash(url.searchParams.get("sourceHash"));
     const minSeeders = normalizeMinimumSeeders(url.searchParams.get("minSeeders"));
     const allowedFormats = normalizeAllowedFormats(url.searchParams.get("allowedFormats"));
+    const sourceLanguage = normalizeSourceLanguageFilter(url.searchParams.get("sourceLang"));
 
     if (!/^\d+$/.test(tmdbId)) {
       return json({ error: "Missing or invalid tmdbId query parameter." }, 400);
@@ -6841,6 +7719,7 @@ async function handleApi(url, request) {
       sourceHash,
       minSeeders,
       allowedFormats,
+      sourceLanguage,
     });
     const resolvedSourceInput = String(resolved?.sourceInput || extractPlayableSourceInput(resolved?.playableUrl || "")).trim();
     const selectedSubtitleStreamIndex = Number(resolved?.selectedSubtitleStreamIndex || -1);
@@ -6868,8 +7747,29 @@ async function handleApi(url, request) {
       });
     }
 
+    if (request.method === "DELETE") {
+      const tmdbId = String(url.searchParams.get("tmdbId") || "").trim();
+      if (!/^\d+$/.test(tmdbId)) {
+        return json({ error: "Missing or invalid tmdbId query parameter." }, 400);
+      }
+
+      deletePersistedTitleTrackPreference(tmdbId);
+      deletePersistedPlaybackSessionsForTmdb(tmdbId);
+      invalidateAllMovieResolveCachesForTmdb(tmdbId);
+
+      return json({
+        ok: true,
+        tmdbId,
+        cleared: {
+          titlePreferences: true,
+          playbackSessions: true,
+          movieResolveCaches: true,
+        },
+      });
+    }
+
     if (request.method !== "POST") {
-      return json({ error: "Method not allowed. Use GET or POST." }, 405);
+      return json({ error: "Method not allowed. Use GET, POST, or DELETE." }, 405);
     }
 
     let payload = null;
@@ -7033,6 +7933,7 @@ async function handleApi(url, request) {
     const rawAudioStream = Number(url.searchParams.get("audioStream") || -1);
     const rawSubtitleStream = Number(url.searchParams.get("subtitleStream") || -1);
     const rawAudioSyncMs = Number(url.searchParams.get("audioSyncMs") || 0);
+    const requestedVideoMode = normalizeRemuxVideoMode(url.searchParams.get("videoMode") || REMUX_VIDEO_MODE);
     const startSeconds = Number.isFinite(rawStart) && rawStart > 0 ? rawStart : 0;
     const audioStreamIndex = Number.isFinite(rawAudioStream) && rawAudioStream >= 0
       ? Math.floor(rawAudioStream)
@@ -7051,6 +7952,7 @@ async function handleApi(url, request) {
       audioStreamIndex,
       subtitleStreamIndex,
       audioSyncMs,
+      requestedVideoMode,
     );
   }
 
@@ -7088,4 +7990,5 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Server running at http://${HOST}:${server.port}`);
+const DISPLAY_HOST = isLoopbackHostname(HOST) ? "localhost" : HOST;
+console.log(`Server running at http://${DISPLAY_HOST}:${server.port}`);

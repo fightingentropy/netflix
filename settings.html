@@ -57,13 +57,33 @@
 
         <section class="source-filter-section" aria-labelledby="sourceFilterTitle">
           <h2 id="sourceFilterTitle" class="settings-section-title">Source Filters</h2>
-          <p class="source-filter-help">Filter source picks by seeds and container format.</p>
+          <p class="source-filter-help">Filter source picks by seeds/container and cap how many top-seeded results are shown.</p>
 
           <div class="source-filter-grid">
-            <label class="source-min-seeds" for="sourceMinSeeders">
-              <span class="source-filter-label">Minimum seeds</span>
-              <input id="sourceMinSeeders" name="sourceMinSeeders" type="number" min="0" max="50000" step="1" value="0" />
-            </label>
+            <div class="source-filter-stack">
+              <label class="source-min-seeds" for="sourceMinSeeders">
+                <span class="source-filter-label">Minimum seeds</span>
+                <input id="sourceMinSeeders" name="sourceMinSeeders" type="number" min="0" max="50000" step="1" value="0" />
+              </label>
+
+              <label class="source-results-limit" for="sourceResultsLimit">
+                <span class="source-filter-label">Results shown</span>
+                <input id="sourceResultsLimit" name="sourceResultsLimit" type="number" min="1" max="20" step="1" value="5" />
+              </label>
+
+              <label class="source-language-filter" for="sourceLanguage">
+                <span class="source-filter-label">Source language</span>
+                <select id="sourceLanguage" name="sourceLanguage">
+                  <option value="en">English only (default)</option>
+                  <option value="any">Any language</option>
+                  <option value="fr">French</option>
+                  <option value="es">Spanish</option>
+                  <option value="de">German</option>
+                  <option value="it">Italian</option>
+                  <option value="pt">Portuguese</option>
+                </select>
+              </label>
+            </div>
 
             <fieldset class="source-format-fieldset">
               <legend class="source-filter-label">Allowed formats</legend>
@@ -78,7 +98,46 @@
             </fieldset>
           </div>
 
-          <p class="source-filter-note">If all formats are selected, format filtering is disabled.</p>
+          <p class="source-filter-note">MP4 is always kept enabled as a compatibility fallback and default option when available. If all formats are selected, format filtering is disabled.</p>
+        </section>
+
+        <section class="native-playback-section" aria-labelledby="nativePlaybackTitle">
+          <h2 id="nativePlaybackTitle" class="settings-section-title">Native Playback</h2>
+          <p class="native-playback-help">Choose whether MKV/remux playback should try mpv first or stay in-browser.</p>
+          <div class="native-playback-options" role="radiogroup" aria-label="Native playback mode">
+            <label class="native-playback-option">
+              <input type="radio" name="nativePlaybackMode" value="auto" />
+              <span class="native-playback-option-label">Auto (Use mpv when available)</span>
+            </label>
+            <label class="native-playback-option">
+              <input type="radio" name="nativePlaybackMode" value="off" />
+              <span class="native-playback-option-label">Browser only</span>
+            </label>
+          </div>
+          <p class="native-playback-note">This setting updates instantly after you save and reload player pages.</p>
+        </section>
+
+        <section class="remux-mode-section" aria-labelledby="remuxModeTitle">
+          <h2 id="remuxModeTitle" class="settings-section-title">Browser Remux Mode</h2>
+          <p class="remux-mode-help">Controls how <code>/api/remux</code> handles video timing when playing in the browser.</p>
+          <div class="remux-mode-options" role="radiogroup" aria-label="Browser remux video mode">
+            <label class="remux-mode-option">
+              <input type="radio" name="remuxVideoMode" value="auto" />
+              <span class="remux-mode-option-label">Auto (Recommended)</span>
+              <small>Uses copy for easy files and normalize for MKV/WebM-like sources.</small>
+            </label>
+            <label class="remux-mode-option">
+              <input type="radio" name="remuxVideoMode" value="copy" />
+              <span class="remux-mode-option-label">Copy (Fastest)</span>
+              <small>Lowest CPU usage, but some problematic files can stay out of sync.</small>
+            </label>
+            <label class="remux-mode-option">
+              <input type="radio" name="remuxVideoMode" value="normalize" />
+              <span class="remux-mode-option-label">Normalize (Best Sync)</span>
+              <small>Rebuilds video timestamps for stronger sync correction, with higher CPU usage.</small>
+            </label>
+          </div>
+          <p class="remux-mode-note">Applies only to browser playback through remux. Native mpv playback is separate.</p>
         </section>
 
         <section class="subtitle-color-section" aria-labelledby="subtitleColorTitle">

@@ -22,7 +22,9 @@ body {
 
 .settings-page {
   min-height: 100vh;
-  padding: 26px;
+  width: min(1320px, 100%);
+  margin: 0 auto;
+  padding: 26px clamp(18px, 2.8vw, 36px);
 }
 
 .settings-header {
@@ -58,7 +60,8 @@ body {
 }
 
 .settings-card {
-  width: min(840px, 100%);
+  width: 100%;
+  max-width: 1240px;
   border-radius: 16px;
   padding: 30px;
   background: linear-gradient(180deg, rgba(26, 28, 33, 0.95) 0%, rgba(18, 19, 24, 0.95) 100%);
@@ -156,12 +159,28 @@ body {
 .source-filter-grid {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: minmax(0, 170px) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  column-gap: 20px;
+  row-gap: 12px;
   align-items: start;
 }
 
+.source-filter-stack {
+  display: grid;
+  gap: 10px;
+}
+
 .source-min-seeds {
+  display: grid;
+  gap: 8px;
+}
+
+.source-results-limit {
+  display: grid;
+  gap: 8px;
+}
+
+.source-language-filter {
   display: grid;
   gap: 8px;
 }
@@ -173,7 +192,8 @@ body {
   color: rgba(255, 255, 255, 0.7);
 }
 
-#sourceMinSeeders {
+#sourceMinSeeders,
+#sourceResultsLimit {
   border: 1px solid var(--line);
   border-radius: 9px;
   min-height: 38px;
@@ -181,6 +201,21 @@ body {
   background: rgba(255, 255, 255, 0.06);
   color: #fff;
   font: inherit;
+}
+
+#sourceLanguage {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  min-height: 38px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font: inherit;
+}
+
+#sourceLanguage option {
+  background: #121317;
+  color: #fff;
 }
 
 .source-format-fieldset {
@@ -224,6 +259,123 @@ body {
 }
 
 .source-filter-note {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.native-playback-section {
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.native-playback-help {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.native-playback-options {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.native-playback-option {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px 10px 40px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+}
+
+.native-playback-option input {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.native-playback-option:has(input:checked) {
+  border-color: rgba(229, 9, 20, 0.8);
+  background: rgba(229, 9, 20, 0.1);
+}
+
+.native-playback-option-label {
+  font-size: 0.94rem;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.native-playback-note {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.remux-mode-section {
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.remux-mode-help {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.remux-mode-options {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.remux-mode-option {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px 10px 40px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+}
+
+.remux-mode-option input {
+  position: absolute;
+  left: 12px;
+  top: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.remux-mode-option:has(input:checked) {
+  border-color: rgba(229, 9, 20, 0.8);
+  background: rgba(229, 9, 20, 0.1);
+}
+
+.remux-mode-option-label {
+  font-size: 0.94rem;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.remux-mode-option small {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.remux-mode-note {
   margin: 10px 0 0;
   font-size: 0.82rem;
   color: rgba(255, 255, 255, 0.6);

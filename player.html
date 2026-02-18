@@ -91,7 +91,7 @@
                 >
                   <img src="assets/icons/player-controls/right-captions.svg" class="control-icon-image" alt="" />
                 </button>
-                <div id="audioMenu" class="speed-popover audio-popover subtitles-popover" role="listbox" aria-label="Subtitle tracks">
+                <div id="audioMenu" class="speed-popover audio-popover subtitles-popover" role="dialog" aria-label="Subtitles and sources">
                   <div class="audio-popover-grid subtitles-only">
                     <section class="audio-popover-column audio-track-column">
                       <h3 class="audio-column-title">Audio</h3>
@@ -104,11 +104,31 @@
                       </div>
                     </section>
                     <section class="audio-popover-column audio-subtitle-column">
-                      <h3 class="audio-column-title">Subtitles</h3>
-                      <div id="subtitleOptions" class="audio-options subtitle-options">
-                        <button class="audio-option subtitle-option" type="button" role="option" data-subtitle-lang="off" aria-selected="true">Off</button>
+                      <div class="audio-tab-list" role="tablist" aria-label="Subtitle menu tabs">
+                        <button
+                          id="audioTabSubtitles"
+                          class="audio-tab is-active"
+                          type="button"
+                          role="tab"
+                          aria-selected="true"
+                          aria-controls="subtitlePanel"
+                        >Subtitles</button>
+                        <button
+                          id="audioTabSources"
+                          class="audio-tab"
+                          type="button"
+                          role="tab"
+                          aria-selected="false"
+                          aria-controls="sourcePanel"
+                        >Sources</button>
                       </div>
-                      <section id="sourcePanel" class="audio-source-panel" aria-labelledby="sourceOptionsTitle">
+                      <section id="subtitlePanel" class="audio-tab-panel" role="tabpanel" aria-labelledby="audioTabSubtitles">
+                        <h3 class="audio-column-title">Subtitles</h3>
+                        <div id="subtitleOptions" class="audio-options subtitle-options">
+                          <button class="audio-option subtitle-option" type="button" role="option" data-subtitle-lang="off" aria-selected="true">Off</button>
+                        </div>
+                      </section>
+                      <section id="sourcePanel" class="audio-tab-panel audio-source-panel" role="tabpanel" aria-labelledby="audioTabSources" hidden>
                         <h3 id="sourceOptionsTitle" class="audio-column-title audio-source-title">Sources</h3>
                         <div id="sourceOptions" class="audio-options source-options" role="listbox" aria-label="Playback sources"></div>
                       </section>

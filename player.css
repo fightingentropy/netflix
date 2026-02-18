@@ -12,6 +12,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -48,8 +52,29 @@ body {
 
 #playerVideo::cue {
   color: #b8bcc3;
-  background: transparent;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.82);
+  background: transparent !important;
+  background-color: transparent !important;
+  text-shadow: none !important;
+}
+
+#playerVideo::cue(*) {
+  background: transparent !important;
+  background-color: transparent !important;
+  text-shadow: none !important;
+}
+
+#playerVideo::-webkit-media-text-track-display,
+#playerVideo::-webkit-media-text-track-container,
+#playerVideo::-webkit-media-text-track-background,
+#playerVideo::-webkit-media-text-track-region {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+#playerVideo::-webkit-media-text-track-cue {
+  background: transparent !important;
+  background-color: transparent !important;
+  text-shadow: none !important;
 }
 
 .resolver-overlay {
@@ -122,6 +147,10 @@ body {
 .resolver-overlay.is-error .resolver-card {
   display: grid;
   border-color: rgba(255, 118, 118, 0.62);
+}
+
+.resolver-overlay.is-error {
+  pointer-events: none;
 }
 
 .resolver-overlay.is-error .resolver-loader {
@@ -584,6 +613,7 @@ body {
   width: min(680px, calc(100vw - 22px));
   max-height: min(72vh, 620px);
   padding: 12px 0 10px;
+  overflow: hidden;
 }
 
 .audio-popover-grid {
@@ -594,7 +624,9 @@ body {
 
 .audio-popover-grid.subtitles-only {
   grid-template-columns: minmax(0, 1fr);
+  height: 100%;
   max-width: 100%;
+  min-height: 0;
 }
 
 .audio-popover-grid.subtitles-only .audio-track-column {
@@ -603,6 +635,9 @@ body {
 
 .audio-popover-grid.subtitles-only .audio-subtitle-column {
   border-left: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 0 14px 4px;
 }
 
@@ -611,17 +646,68 @@ body {
   font-size: clamp(1.3rem, 2.1vw, 1.85rem);
 }
 
-.audio-popover-grid.subtitles-only .audio-options:not(.source-options) {
+.audio-popover-grid.subtitles-only .subtitle-options {
   max-height: min(34vh, 250px);
   padding-right: 0;
   margin-right: 0;
   gap: 1px;
 }
 
+.audio-tab-list {
+  margin: 0 0 10px;
+  display: flex;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.audio-tab {
+  border: 0;
+  border-radius: 999px;
+  min-height: 34px;
+  padding: 7px 16px;
+  background: transparent;
+  color: rgba(245, 245, 245, 0.72);
+  font-family: inherit;
+  font-size: clamp(0.9rem, 1.05vw, 1rem);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.audio-tab:hover,
+.audio-tab:focus-visible {
+  outline: none;
+  color: #fff;
+}
+
+.audio-tab[aria-selected="true"] {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.audio-tab-panel {
+  min-height: 0;
+}
+
+.audio-tab-panel[hidden] {
+  display: none !important;
+}
+
 .audio-source-panel {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 0;
+  min-height: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .audio-source-title {
@@ -629,33 +715,35 @@ body {
 }
 
 .source-options {
-  max-height: min(34vh, 280px);
-  padding-right: 0;
-  margin-right: 0;
-  gap: 8px;
+  flex: 1;
+  max-height: min(44vh, 420px);
+  min-height: 0;
+  padding-right: 8px;
+  margin-right: -4px;
+  gap: 6px;
 }
 
-.source-option {
-  display: grid;
-  grid-template-rows: auto auto auto;
-  gap: 5px;
-  min-height: 88px;
-  padding: 10px 12px 10px 36px;
+.audio-option.source-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 0;
+  padding: 10px 12px 10px 34px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.02);
-  align-content: center;
+  justify-content: center;
   overflow: hidden;
 }
 
-.source-option::before {
+.audio-option.source-option::before {
   left: 10px;
   font-size: 1.05rem;
 }
 
 .source-option-name {
   font-size: clamp(0.92rem, 1.12vw, 1.05rem);
-  line-height: 1.28;
+  line-height: 1.24;
   color: #fff;
   white-space: normal;
   display: -webkit-box;
@@ -668,8 +756,9 @@ body {
 }
 
 .source-option-hint {
+  display: block;
   font-size: clamp(0.76rem, 0.95vw, 0.88rem);
-  line-height: 1.24;
+  line-height: 1.2;
   color: rgba(245, 245, 245, 0.82);
   white-space: nowrap;
   overflow: hidden;
@@ -677,8 +766,9 @@ body {
 }
 
 .source-option-meta {
+  display: block;
   font-size: clamp(0.7rem, 0.9vw, 0.82rem);
-  line-height: 1.2;
+  line-height: 1.15;
   color: rgba(245, 245, 245, 0.7);
   white-space: nowrap;
   overflow: hidden;
@@ -690,6 +780,14 @@ body {
   font-size: 0.9rem;
   color: rgba(245, 245, 245, 0.72);
   padding: 6px 2px;
+}
+
+.source-option-details {
+  display: none;
+}
+
+.source-option-details[hidden] {
+  display: none;
 }
 
 .audio-popover-grid.subtitles-only .audio-option:not(.source-option) {
@@ -986,6 +1084,7 @@ body {
     width: min(90vw, 420px);
     max-height: min(62vh, 460px);
     padding: 10px 0 8px;
+    overflow: hidden;
   }
 
   .audio-popover-grid {
@@ -1005,6 +1104,7 @@ body {
 
   .audio-popover-grid.subtitles-only .audio-subtitle-column {
     border-top: 0;
+    min-height: 0;
     margin-top: 0;
     padding-top: 0;
     padding-left: 10px;
@@ -1017,29 +1117,41 @@ body {
     font-size: clamp(1.1rem, 4.5vw, 1.45rem);
   }
 
-  .audio-popover-grid.subtitles-only .audio-options:not(.source-options) {
+  .audio-popover-grid.subtitles-only .subtitle-options {
     max-height: min(24vh, 150px);
     padding-right: 0;
     margin-right: 0;
   }
 
   .audio-source-panel {
-    margin-top: 10px;
-    padding-top: 10px;
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  .audio-tab-list {
+    margin-bottom: 8px;
+    gap: 4px;
+    padding: 2px;
+  }
+
+  .audio-tab {
+    min-height: 30px;
+    padding: 6px 12px;
+    font-size: clamp(0.72rem, 2.9vw, 0.82rem);
   }
 
   .source-options {
-    max-height: min(30vh, 220px);
+    max-height: min(38vh, 280px);
     gap: 6px;
   }
 
-  .source-option {
-    min-height: 72px;
+  .audio-option.source-option {
+    min-height: 0;
     padding: 8px 10px 8px 30px;
     border-radius: 7px;
   }
 
-  .source-option::before {
+  .audio-option.source-option::before {
     left: 8px;
     font-size: 0.98rem;
   }
@@ -1054,6 +1166,10 @@ body {
 
   .source-option-meta {
     font-size: clamp(0.64rem, 2.5vw, 0.74rem);
+  }
+
+  .source-option-details {
+    display: none;
   }
 
   .audio-popover-grid.subtitles-only .audio-option:not(.source-option) {
