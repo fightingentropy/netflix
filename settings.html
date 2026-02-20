@@ -1,224 +1,511 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Playback Settings</title>
-  <link rel="icon" type="image/svg+xml" href="assets/icons/netflix-n.svg" />
-  <link rel="apple-touch-icon" href="assets/icons/netflix-n.svg" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="settings.css" />
-</head>
-<body>
-  <main class="settings-page">
-    <header class="settings-header">
-      <a class="settings-logo-link" href="index.html" aria-label="Back to home">
-        <img src="assets/icons/netflix-n.svg" alt="Netflix" class="settings-logo" />
-      </a>
-      <a class="settings-back-link" href="index.html">Back to Browse</a>
-    </header>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Playback Settings</title>
+        <link
+            rel="icon"
+            type="image/svg+xml"
+            href="assets/icons/netflix-n.svg"
+        />
+        <link rel="apple-touch-icon" href="assets/icons/netflix-n.svg" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap"
+            rel="stylesheet"
+        />
+        <link rel="stylesheet" href="settings.css" />
+    </head>
+    <body>
+        <main class="settings-page">
+            <header class="settings-header">
+                <a
+                    class="settings-logo-link"
+                    href="index.html"
+                    aria-label="Back to home"
+                >
+                    <img
+                        src="assets/icons/netflix-n.svg"
+                        alt="Netflix"
+                        class="settings-logo"
+                    />
+                </a>
+                <a class="settings-back-link" href="index.html"
+                    >Back to Browse</a
+                >
+            </header>
 
-    <section class="settings-card" aria-labelledby="settingsTitle">
-      <div class="settings-headline">
-        <p class="settings-kicker">Profile Settings</p>
-        <h1 id="settingsTitle">Playback Settings</h1>
-        <p class="settings-description">
-          Tune stream quality preferences.
-        </p>
-      </div>
+            <section class="settings-card" aria-labelledby="settingsTitle">
+                <div class="settings-headline">
+                    <p class="settings-kicker">Profile Settings</p>
+                    <h1 id="settingsTitle">Playback Settings</h1>
+                    <p class="settings-description">
+                        Tune stream quality preferences.
+                    </p>
+                </div>
 
-      <form id="qualityForm" class="quality-form">
-        <h2 class="settings-section-title">Quality Filter</h2>
-        <label class="quality-option">
-          <input type="radio" name="quality" value="auto" />
-          <span class="quality-option-label">Auto (Best Available)</span>
-          <small>Always pick the highest ranked source</small>
-        </label>
+                <form id="qualityForm" class="quality-form">
+                    <h2 class="settings-section-title">Quality Filter</h2>
+                    <label class="quality-option">
+                        <input type="radio" name="quality" value="auto" />
+                        <span class="quality-option-label"
+                            >Auto (Best Available)</span
+                        >
+                        <small>Always pick the highest ranked source</small>
+                    </label>
 
-        <label class="quality-option">
-          <input type="radio" name="quality" value="2160p" />
-          <span class="quality-option-label">4K (2160p)</span>
-          <small>Prefer ultra-high resolution sources</small>
-        </label>
+                    <label class="quality-option">
+                        <input type="radio" name="quality" value="2160p" />
+                        <span class="quality-option-label">4K (2160p)</span>
+                        <small>Prefer ultra-high resolution sources</small>
+                    </label>
 
-        <label class="quality-option">
-          <input type="radio" name="quality" value="1080p" />
-          <span class="quality-option-label">Full HD (1080p)</span>
-          <small>Balanced quality and compatibility</small>
-        </label>
+                    <label class="quality-option">
+                        <input type="radio" name="quality" value="1080p" />
+                        <span class="quality-option-label"
+                            >Full HD (1080p)</span
+                        >
+                        <small>Balanced quality and compatibility</small>
+                    </label>
 
-        <label class="quality-option">
-          <input type="radio" name="quality" value="720p" />
-          <span class="quality-option-label">HD (720p)</span>
-          <small>Lower bitrate for smoother playback</small>
-        </label>
+                    <label class="quality-option">
+                        <input type="radio" name="quality" value="720p" />
+                        <span class="quality-option-label">HD (720p)</span>
+                        <small>Lower bitrate for smoother playback</small>
+                    </label>
 
-        <section class="source-filter-section" aria-labelledby="sourceFilterTitle">
-          <h2 id="sourceFilterTitle" class="settings-section-title">Source Filters</h2>
-          <p class="source-filter-help">Filter source picks by seeds/container and cap how many top-seeded results are shown.</p>
+                    <section
+                        class="source-filter-section"
+                        aria-labelledby="sourceFilterTitle"
+                    >
+                        <h2
+                            id="sourceFilterTitle"
+                            class="settings-section-title"
+                        >
+                            Source Filters
+                        </h2>
+                        <p class="source-filter-help">
+                            Filter source picks by seeds/container and cap how
+                            many top-seeded results are shown.
+                        </p>
 
-          <div class="source-filter-grid">
-            <div class="source-filter-stack">
-              <label class="source-min-seeds" for="sourceMinSeeders">
-                <span class="source-filter-label">Minimum seeds</span>
-                <input id="sourceMinSeeders" name="sourceMinSeeders" type="number" min="0" max="50000" step="1" value="0" />
-              </label>
+                        <div class="source-filter-grid">
+                            <div class="source-filter-stack">
+                                <label
+                                    class="source-min-seeds"
+                                    for="sourceMinSeeders"
+                                >
+                                    <span class="source-filter-label"
+                                        >Minimum seeds</span
+                                    >
+                                    <input
+                                        id="sourceMinSeeders"
+                                        name="sourceMinSeeders"
+                                        type="number"
+                                        min="0"
+                                        max="50000"
+                                        step="1"
+                                        value="0"
+                                    />
+                                </label>
 
-              <label class="source-results-limit" for="sourceResultsLimit">
-                <span class="source-filter-label">Results shown</span>
-                <input id="sourceResultsLimit" name="sourceResultsLimit" type="number" min="1" max="20" step="1" value="5" />
-              </label>
+                                <label
+                                    class="source-results-limit"
+                                    for="sourceResultsLimit"
+                                >
+                                    <span class="source-filter-label"
+                                        >Results shown</span
+                                    >
+                                    <input
+                                        id="sourceResultsLimit"
+                                        name="sourceResultsLimit"
+                                        type="number"
+                                        min="1"
+                                        max="20"
+                                        step="1"
+                                        value="5"
+                                    />
+                                </label>
 
-              <label class="source-language-filter" for="sourceLanguage">
-                <span class="source-filter-label">Source language</span>
-                <select id="sourceLanguage" name="sourceLanguage">
-                  <option value="en">English only (default)</option>
-                  <option value="any">Any language</option>
-                  <option value="fr">French</option>
-                  <option value="es">Spanish</option>
-                  <option value="de">German</option>
-                  <option value="it">Italian</option>
-                  <option value="pt">Portuguese</option>
-                </select>
-              </label>
-            </div>
+                                <label
+                                    class="source-language-filter"
+                                    for="sourceLanguage"
+                                >
+                                    <span class="source-filter-label"
+                                        >Source language</span
+                                    >
+                                    <select
+                                        id="sourceLanguage"
+                                        name="sourceLanguage"
+                                    >
+                                        <option value="en">
+                                            English only (default)
+                                        </option>
+                                        <option value="any">
+                                            Any language
+                                        </option>
+                                        <option value="fr">French</option>
+                                        <option value="es">Spanish</option>
+                                        <option value="de">German</option>
+                                        <option value="it">Italian</option>
+                                        <option value="pt">Portuguese</option>
+                                    </select>
+                                </label>
+                            </div>
 
-            <fieldset class="source-format-fieldset">
-              <legend class="source-filter-label">Allowed formats</legend>
-              <div class="source-format-options">
-                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="mp4" /> <span>MP4</span></label>
-                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="mkv" /> <span>MKV</span></label>
-                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="m3u8" /> <span>M3U8</span></label>
-                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="ts" /> <span>TS</span></label>
-                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="avi" /> <span>AVI</span></label>
-                <label class="source-format-option"><input type="checkbox" name="sourceFormats" value="wmv" /> <span>WMV</span></label>
-              </div>
-            </fieldset>
-          </div>
+                            <fieldset class="source-format-fieldset">
+                                <legend class="source-filter-label">
+                                    Allowed formats
+                                </legend>
+                                <div class="source-format-options">
+                                    <label class="source-format-option"
+                                        ><input
+                                            type="checkbox"
+                                            name="sourceFormats"
+                                            value="mp4"
+                                            checked
+                                            disabled
+                                        />
+                                        <span>MP4</span></label
+                                    >
+                                </div>
+                            </fieldset>
+                        </div>
 
-          <p class="source-filter-note">MP4 is always kept enabled as a compatibility fallback and default option when available. If all formats are selected, format filtering is disabled.</p>
-        </section>
+                        <p class="source-filter-note">
+                            Source resolution is locked to MP4 for direct
+                            browser playback and smoother startup.
+                        </p>
+                    </section>
 
-        <section class="native-playback-section" aria-labelledby="nativePlaybackTitle">
-          <h2 id="nativePlaybackTitle" class="settings-section-title">Native Playback</h2>
-          <p class="native-playback-help">Choose whether MKV/remux playback should try mpv first or stay in-browser.</p>
-          <div class="native-playback-options" role="radiogroup" aria-label="Native playback mode">
-            <label class="native-playback-option">
-              <input type="radio" name="nativePlaybackMode" value="auto" />
-              <span class="native-playback-option-label">Auto (Use mpv when available)</span>
-            </label>
-            <label class="native-playback-option">
-              <input type="radio" name="nativePlaybackMode" value="off" />
-              <span class="native-playback-option-label">Browser only</span>
-            </label>
-          </div>
-          <p class="native-playback-note">This setting updates instantly after you save and reload player pages.</p>
-        </section>
+                    <section
+                        class="native-playback-section"
+                        aria-labelledby="nativePlaybackTitle"
+                    >
+                        <h2
+                            id="nativePlaybackTitle"
+                            class="settings-section-title"
+                        >
+                            Native Playback
+                        </h2>
+                        <p class="native-playback-help">
+                            Choose whether MKV/remux playback should try mpv
+                            first or stay in-browser.
+                        </p>
+                        <div
+                            class="native-playback-options"
+                            role="radiogroup"
+                            aria-label="Native playback mode"
+                        >
+                            <label class="native-playback-option">
+                                <input
+                                    type="radio"
+                                    name="nativePlaybackMode"
+                                    value="auto"
+                                />
+                                <span class="native-playback-option-label"
+                                    >Auto (Use mpv when available)</span
+                                >
+                            </label>
+                            <label class="native-playback-option">
+                                <input
+                                    type="radio"
+                                    name="nativePlaybackMode"
+                                    value="off"
+                                />
+                                <span class="native-playback-option-label"
+                                    >Browser only</span
+                                >
+                            </label>
+                        </div>
+                        <p class="native-playback-note">
+                            This setting updates instantly after you save and
+                            reload player pages.
+                        </p>
+                    </section>
 
-        <section class="remux-mode-section" aria-labelledby="remuxModeTitle">
-          <h2 id="remuxModeTitle" class="settings-section-title">Browser Remux Mode</h2>
-          <p class="remux-mode-help">Controls how <code>/api/remux</code> handles video timing when playing in the browser.</p>
-          <div class="remux-mode-options" role="radiogroup" aria-label="Browser remux video mode">
-            <label class="remux-mode-option">
-              <input type="radio" name="remuxVideoMode" value="auto" />
-              <span class="remux-mode-option-label">Auto (Recommended)</span>
-              <small>Uses copy for easy files and normalize for MKV/WebM-like sources.</small>
-            </label>
-            <label class="remux-mode-option">
-              <input type="radio" name="remuxVideoMode" value="copy" />
-              <span class="remux-mode-option-label">Copy (Fastest)</span>
-              <small>Lowest CPU usage, but some problematic files can stay out of sync.</small>
-            </label>
-            <label class="remux-mode-option">
-              <input type="radio" name="remuxVideoMode" value="normalize" />
-              <span class="remux-mode-option-label">Normalize (Best Sync)</span>
-              <small>Rebuilds video timestamps for stronger sync correction, with higher CPU usage.</small>
-            </label>
-          </div>
-          <p class="remux-mode-note">Applies only to browser playback through remux. Native mpv playback is separate.</p>
-        </section>
+                    <section
+                        class="remux-mode-section"
+                        aria-labelledby="remuxModeTitle"
+                    >
+                        <h2 id="remuxModeTitle" class="settings-section-title">
+                            Browser Remux Mode
+                        </h2>
+                        <p class="remux-mode-help">
+                            Controls how <code>/api/remux</code> handles video
+                            timing when playing in the browser.
+                        </p>
+                        <div
+                            class="remux-mode-options"
+                            role="radiogroup"
+                            aria-label="Browser remux video mode"
+                        >
+                            <label class="remux-mode-option">
+                                <input
+                                    type="radio"
+                                    name="remuxVideoMode"
+                                    value="auto"
+                                />
+                                <span class="remux-mode-option-label"
+                                    >Auto (Recommended)</span
+                                >
+                                <small
+                                    >Uses copy for easy files and normalize for
+                                    MKV/WebM-like sources.</small
+                                >
+                            </label>
+                            <label class="remux-mode-option">
+                                <input
+                                    type="radio"
+                                    name="remuxVideoMode"
+                                    value="copy"
+                                />
+                                <span class="remux-mode-option-label"
+                                    >Copy (Fastest)</span
+                                >
+                                <small
+                                    >Lowest CPU usage, but some problematic
+                                    files can stay out of sync.</small
+                                >
+                            </label>
+                            <label class="remux-mode-option">
+                                <input
+                                    type="radio"
+                                    name="remuxVideoMode"
+                                    value="normalize"
+                                />
+                                <span class="remux-mode-option-label"
+                                    >Normalize (Best Sync)</span
+                                >
+                                <small
+                                    >Rebuilds video timestamps for stronger sync
+                                    correction, with higher CPU usage.</small
+                                >
+                            </label>
+                        </div>
+                        <p class="remux-mode-note">
+                            Applies only to browser playback through remux.
+                            Native mpv playback is separate.
+                        </p>
+                    </section>
 
-        <section class="subtitle-color-section" aria-labelledby="subtitleColorTitle">
-          <h2 id="subtitleColorTitle" class="settings-section-title">Subtitle Color</h2>
-          <p class="subtitle-color-help">Default is a muted gray so captions are easier on your eyes.</p>
-          <div class="subtitle-color-controls">
-            <label class="subtitle-color-picker-label" for="subtitleColorInput">Color</label>
-            <input id="subtitleColorInput" name="subtitleColor" type="color" value="#b8bcc3" />
-            <button id="subtitleColorReset" class="subtitle-color-reset-btn" type="button">Reset</button>
-          </div>
-          <p id="subtitleColorPreview" class="subtitle-color-preview">Sample subtitle preview text.</p>
-        </section>
+                    <section
+                        class="subtitle-color-section"
+                        aria-labelledby="subtitleColorTitle"
+                    >
+                        <h2
+                            id="subtitleColorTitle"
+                            class="settings-section-title"
+                        >
+                            Subtitle Color
+                        </h2>
+                        <p class="subtitle-color-help">
+                            Default is a muted gray so captions are easier on
+                            your eyes.
+                        </p>
+                        <div class="subtitle-color-controls">
+                            <label
+                                class="subtitle-color-picker-label"
+                                for="subtitleColorInput"
+                                >Color</label
+                            >
+                            <input
+                                id="subtitleColorInput"
+                                name="subtitleColor"
+                                type="color"
+                                value="#b8bcc3"
+                            />
+                            <button
+                                id="subtitleColorReset"
+                                class="subtitle-color-reset-btn"
+                                type="button"
+                            >
+                                Reset
+                            </button>
+                        </div>
+                        <p
+                            id="subtitleColorPreview"
+                            class="subtitle-color-preview"
+                        >
+                            Sample subtitle preview text.
+                        </p>
+                    </section>
 
-        <section class="avatar-style-section" aria-labelledby="avatarStyleTitle">
-          <h2 id="avatarStyleTitle" class="settings-section-title">Profile Icon</h2>
-          <p class="avatar-style-help">Choose the icon style used in the top-right account menu.</p>
+                    <section
+                        class="avatar-style-section"
+                        aria-labelledby="avatarStyleTitle"
+                    >
+                        <h2
+                            id="avatarStyleTitle"
+                            class="settings-section-title"
+                        >
+                            Profile Icon
+                        </h2>
+                        <p class="avatar-style-help">
+                            Choose the icon style used in the top-right account
+                            menu.
+                        </p>
 
-          <div class="avatar-style-preview-wrap">
-            <span class="avatar-style-preview-label">Preview</span>
-            <div id="avatarStylePreview" class="avatar-style-preview avatar-style-blue" aria-hidden="true"></div>
-          </div>
+                        <div class="avatar-style-preview-wrap">
+                            <span class="avatar-style-preview-label"
+                                >Preview</span
+                            >
+                            <div
+                                id="avatarStylePreview"
+                                class="avatar-style-preview avatar-style-blue"
+                                aria-hidden="true"
+                            ></div>
+                        </div>
 
-          <div class="avatar-style-options" role="radiogroup" aria-label="Profile icon style">
-            <label class="avatar-style-option">
-              <input type="radio" name="avatarStyle" value="blue" />
-              <span class="avatar-style-swatch avatar-style-blue" aria-hidden="true"></span>
-              <span>Blue</span>
-            </label>
-            <label class="avatar-style-option">
-              <input type="radio" name="avatarStyle" value="crimson" />
-              <span class="avatar-style-swatch avatar-style-crimson" aria-hidden="true"></span>
-              <span>Crimson</span>
-            </label>
-            <label class="avatar-style-option">
-              <input type="radio" name="avatarStyle" value="emerald" />
-              <span class="avatar-style-swatch avatar-style-emerald" aria-hidden="true"></span>
-              <span>Emerald</span>
-            </label>
-            <label class="avatar-style-option">
-              <input type="radio" name="avatarStyle" value="violet" />
-              <span class="avatar-style-swatch avatar-style-violet" aria-hidden="true"></span>
-              <span>Violet</span>
-            </label>
-            <label class="avatar-style-option">
-              <input type="radio" name="avatarStyle" value="amber" />
-              <span class="avatar-style-swatch avatar-style-amber" aria-hidden="true"></span>
-              <span>Amber</span>
-            </label>
-            <label class="avatar-style-option avatar-style-option--custom">
-              <input type="radio" name="avatarStyle" value="custom" />
-              <span id="avatarCustomThumb" class="avatar-style-swatch avatar-style-custom-thumb" aria-hidden="true"></span>
-              <span>Custom image</span>
-            </label>
-          </div>
+                        <div
+                            class="avatar-style-options"
+                            role="radiogroup"
+                            aria-label="Profile icon style"
+                        >
+                            <label class="avatar-style-option">
+                                <input
+                                    type="radio"
+                                    name="avatarStyle"
+                                    value="blue"
+                                />
+                                <span
+                                    class="avatar-style-swatch avatar-style-blue"
+                                    aria-hidden="true"
+                                ></span>
+                                <span>Blue</span>
+                            </label>
+                            <label class="avatar-style-option">
+                                <input
+                                    type="radio"
+                                    name="avatarStyle"
+                                    value="crimson"
+                                />
+                                <span
+                                    class="avatar-style-swatch avatar-style-crimson"
+                                    aria-hidden="true"
+                                ></span>
+                                <span>Crimson</span>
+                            </label>
+                            <label class="avatar-style-option">
+                                <input
+                                    type="radio"
+                                    name="avatarStyle"
+                                    value="emerald"
+                                />
+                                <span
+                                    class="avatar-style-swatch avatar-style-emerald"
+                                    aria-hidden="true"
+                                ></span>
+                                <span>Emerald</span>
+                            </label>
+                            <label class="avatar-style-option">
+                                <input
+                                    type="radio"
+                                    name="avatarStyle"
+                                    value="violet"
+                                />
+                                <span
+                                    class="avatar-style-swatch avatar-style-violet"
+                                    aria-hidden="true"
+                                ></span>
+                                <span>Violet</span>
+                            </label>
+                            <label class="avatar-style-option">
+                                <input
+                                    type="radio"
+                                    name="avatarStyle"
+                                    value="amber"
+                                />
+                                <span
+                                    class="avatar-style-swatch avatar-style-amber"
+                                    aria-hidden="true"
+                                ></span>
+                                <span>Amber</span>
+                            </label>
+                            <label
+                                class="avatar-style-option avatar-style-option--custom"
+                            >
+                                <input
+                                    type="radio"
+                                    name="avatarStyle"
+                                    value="custom"
+                                />
+                                <span
+                                    id="avatarCustomThumb"
+                                    class="avatar-style-swatch avatar-style-custom-thumb"
+                                    aria-hidden="true"
+                                ></span>
+                                <span>Custom image</span>
+                            </label>
+                        </div>
 
-          <div class="avatar-upload-controls">
-            <label class="avatar-upload-btn" for="avatarImageInput">Choose from computer</label>
-            <input id="avatarImageInput" type="file" accept="image/*" />
-            <span id="avatarUploadHint" class="avatar-upload-hint">Auto center-crop + resize to square.</span>
-          </div>
-        </section>
+                        <div class="avatar-upload-controls">
+                            <label
+                                class="avatar-upload-btn"
+                                for="avatarImageInput"
+                                >Choose from computer</label
+                            >
+                            <input
+                                id="avatarImageInput"
+                                type="file"
+                                accept="image/*"
+                            />
+                            <span
+                                id="avatarUploadHint"
+                                class="avatar-upload-hint"
+                                >Auto center-crop + resize to square.</span
+                            >
+                        </div>
+                    </section>
 
-        <section class="maintenance-section" aria-labelledby="maintenanceTitle">
-          <h2 id="maintenanceTitle" class="settings-section-title">Maintenance</h2>
-          <p class="maintenance-help">
-            Clears all server-side caches for stream resolution, metadata, subtitles, and playback sessions.
-          </p>
-          <div class="maintenance-actions">
-            <button id="clearAllCachesBtn" class="clear-cache-btn" type="button">Clear All Caches</button>
-            <p id="cacheClearStatus" class="cache-clear-status" role="status" aria-live="polite"></p>
-          </div>
-        </section>
+                    <section
+                        class="maintenance-section"
+                        aria-labelledby="maintenanceTitle"
+                    >
+                        <h2
+                            id="maintenanceTitle"
+                            class="settings-section-title"
+                        >
+                            Maintenance
+                        </h2>
+                        <p class="maintenance-help">
+                            Clears all server-side caches for stream resolution,
+                            metadata, subtitles, and playback sessions.
+                        </p>
+                        <div class="maintenance-actions">
+                            <button
+                                id="clearAllCachesBtn"
+                                class="clear-cache-btn"
+                                type="button"
+                            >
+                                Clear All Caches
+                            </button>
+                            <p
+                                id="cacheClearStatus"
+                                class="cache-clear-status"
+                                role="status"
+                                aria-live="polite"
+                            ></p>
+                        </div>
+                    </section>
 
-        <div class="settings-actions">
-          <button id="saveQuality" class="save-btn" type="submit">Save Preference</button>
-          <p id="saveStatus" class="save-status" role="status" aria-live="polite"></p>
-        </div>
-      </form>
-    </section>
-  </main>
+                    <div class="settings-actions">
+                        <button id="saveQuality" class="save-btn" type="submit">
+                            Save Preference
+                        </button>
+                        <p
+                            id="saveStatus"
+                            class="save-status"
+                            role="status"
+                            aria-live="polite"
+                        ></p>
+                    </div>
+                </form>
+            </section>
+        </main>
 
-  <script type="module" src="settings.js"></script>
-</body>
+        <script type="module" src="settings.js"></script>
+    </body>
 </html>

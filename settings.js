@@ -17,12 +17,25 @@ const AVATAR_OUTPUT_SIZE_PX = 180;
 const DEFAULT_SOURCE_RESULTS_LIMIT = 5;
 const MAX_SOURCE_RESULTS_LIMIT = 20;
 
-const supportedStreamQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
-const supportedSourceFormats = ["mp4", "mkv", "m3u8", "ts", "avi", "wmv"];
+const supportedStreamQualityPreferences = new Set([
+  "auto",
+  "2160p",
+  "1080p",
+  "720p",
+]);
+const supportedSourceFormats = ["mp4"];
 const supportedSourceLanguages = ["en", "any", "fr", "es", "de", "it", "pt"];
-const supportedAvatarStyles = new Set(["blue", "crimson", "emerald", "violet", "amber"]);
+const supportedAvatarStyles = new Set([
+  "blue",
+  "crimson",
+  "emerald",
+  "violet",
+  "amber",
+]);
 const supportedAvatarChoices = new Set([...supportedAvatarStyles, "custom"]);
-const avatarStyleClassNames = Array.from(supportedAvatarStyles).map((style) => `avatar-style-${style}`);
+const avatarStyleClassNames = Array.from(supportedAvatarStyles).map(
+  (style) => `avatar-style-${style}`,
+);
 
 const qualityForm = document.getElementById("qualityForm");
 const saveStatus = document.getElementById("saveStatus");
@@ -38,13 +51,17 @@ const cacheClearStatus = document.getElementById("cacheClearStatus");
 const sourceMinSeedersInput = document.getElementById("sourceMinSeeders");
 const sourceResultsLimitInput = document.getElementById("sourceResultsLimit");
 const sourceLanguageSelect = document.getElementById("sourceLanguage");
-const sourceFormatInputs = Array.from(document.querySelectorAll('input[name="sourceFormats"]'));
+const sourceFormatInputs = Array.from(
+  document.querySelectorAll('input[name="sourceFormats"]'),
+);
 
 let pendingCustomAvatarImage = "";
 let isClearingCaches = false;
 
 function normalizeStreamQualityPreference(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (!normalized) return "auto";
   if (normalized === "4k" || normalized === "uhd") return "2160p";
   if (normalized === "2160") return "2160p";
@@ -58,7 +75,9 @@ function normalizeStreamQualityPreference(value) {
 
 function getStoredStreamQualityPreference() {
   try {
-    return normalizeStreamQualityPreference(localStorage.getItem(STREAM_QUALITY_PREF_KEY));
+    return normalizeStreamQualityPreference(
+      localStorage.getItem(STREAM_QUALITY_PREF_KEY),
+    );
   } catch {
     return "auto";
   }
@@ -89,11 +108,15 @@ function normalizeSourceFormats(value) {
   const sourceValues = Array.isArray(value)
     ? value
     : String(value || "")
-      .split(/[,\s]+/g)
-      .filter(Boolean);
+        .split(/[,\s]+/g)
+        .filter(Boolean);
 
   const normalized = sourceValues
-    .map((item) => String(item || "").trim().toLowerCase())
+    .map((item) =>
+      String(item || "")
+        .trim()
+        .toLowerCase(),
+    )
     .filter((item) => supportedSourceFormats.includes(item));
   const unique = [...new Set(normalized)];
   if (unique.length && !unique.includes("mp4")) {
@@ -103,11 +126,23 @@ function normalizeSourceFormats(value) {
 }
 
 function normalizeSourceLanguage(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized || normalized === "en" || normalized === "eng" || normalized === "english") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (
+    !normalized ||
+    normalized === "en" ||
+    normalized === "eng" ||
+    normalized === "english"
+  ) {
     return "en";
   }
-  if (normalized === "any" || normalized === "all" || normalized === "auto" || normalized === "*") {
+  if (
+    normalized === "any" ||
+    normalized === "all" ||
+    normalized === "auto" ||
+    normalized === "*"
+  ) {
     return "any";
   }
   if (supportedSourceLanguages.includes(normalized)) {
@@ -117,11 +152,24 @@ function normalizeSourceLanguage(value) {
 }
 
 function normalizeNativePlaybackMode(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized || normalized === "auto" || normalized === "on" || normalized === "1" || normalized === "enabled") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (
+    !normalized ||
+    normalized === "auto" ||
+    normalized === "on" ||
+    normalized === "1" ||
+    normalized === "enabled"
+  ) {
     return "auto";
   }
-  if (normalized === "off" || normalized === "0" || normalized === "disabled" || normalized === "browser") {
+  if (
+    normalized === "off" ||
+    normalized === "0" ||
+    normalized === "disabled" ||
+    normalized === "browser"
+  ) {
     return "off";
   }
   return "auto";
@@ -129,7 +177,9 @@ function normalizeNativePlaybackMode(value) {
 
 function getStoredNativePlaybackMode() {
   try {
-    return normalizeNativePlaybackMode(localStorage.getItem(NATIVE_PLAYBACK_MODE_PREF_KEY));
+    return normalizeNativePlaybackMode(
+      localStorage.getItem(NATIVE_PLAYBACK_MODE_PREF_KEY),
+    );
   } catch {
     return "auto";
   }
@@ -137,7 +187,9 @@ function getStoredNativePlaybackMode() {
 
 function setSelectedNativePlaybackMode(value) {
   const normalized = normalizeNativePlaybackMode(value);
-  const input = qualityForm?.querySelector(`input[name="nativePlaybackMode"][value="${normalized}"]`);
+  const input = qualityForm?.querySelector(
+    `input[name="nativePlaybackMode"][value="${normalized}"]`,
+  );
   if (input) {
     input.checked = true;
   }
@@ -158,23 +210,25 @@ function persistNativePlaybackMode(value) {
 }
 
 function normalizeRemuxVideoMode(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (!normalized || normalized === "auto" || normalized === "default") {
     return "auto";
   }
   if (
-    normalized === "copy"
-    || normalized === "passthrough"
-    || normalized === "direct"
-    || normalized === "streamcopy"
+    normalized === "copy" ||
+    normalized === "passthrough" ||
+    normalized === "direct" ||
+    normalized === "streamcopy"
   ) {
     return "copy";
   }
   if (
-    normalized === "normalize"
-    || normalized === "transcode"
-    || normalized === "aggressive"
-    || normalized === "rebuild"
+    normalized === "normalize" ||
+    normalized === "transcode" ||
+    normalized === "aggressive" ||
+    normalized === "rebuild"
   ) {
     return "normalize";
   }
@@ -183,7 +237,9 @@ function normalizeRemuxVideoMode(value) {
 
 function getStoredRemuxVideoMode() {
   try {
-    return normalizeRemuxVideoMode(localStorage.getItem(REMUX_VIDEO_MODE_PREF_KEY));
+    return normalizeRemuxVideoMode(
+      localStorage.getItem(REMUX_VIDEO_MODE_PREF_KEY),
+    );
   } catch {
     return "auto";
   }
@@ -191,7 +247,9 @@ function getStoredRemuxVideoMode() {
 
 function setSelectedRemuxVideoMode(value) {
   const normalized = normalizeRemuxVideoMode(value);
-  const input = qualityForm?.querySelector(`input[name="remuxVideoMode"][value="${normalized}"]`);
+  const input = qualityForm?.querySelector(
+    `input[name="remuxVideoMode"][value="${normalized}"]`,
+  );
   if (input) {
     input.checked = true;
   }
@@ -213,7 +271,9 @@ function persistRemuxVideoMode(value) {
 
 function getStoredSourceMinSeeders() {
   try {
-    return normalizeSourceMinSeeders(localStorage.getItem(SOURCE_MIN_SEEDERS_PREF_KEY));
+    return normalizeSourceMinSeeders(
+      localStorage.getItem(SOURCE_MIN_SEEDERS_PREF_KEY),
+    );
   } catch {
     return 0;
   }
@@ -221,7 +281,9 @@ function getStoredSourceMinSeeders() {
 
 function getStoredSourceResultsLimit() {
   try {
-    return normalizeSourceResultsLimit(localStorage.getItem(SOURCE_RESULTS_LIMIT_PREF_KEY));
+    return normalizeSourceResultsLimit(
+      localStorage.getItem(SOURCE_RESULTS_LIMIT_PREF_KEY),
+    );
   } catch {
     return DEFAULT_SOURCE_RESULTS_LIMIT;
   }
@@ -251,7 +313,9 @@ function getStoredSourceFormats() {
 
 function getStoredSourceLanguage() {
   try {
-    return normalizeSourceLanguage(localStorage.getItem(SOURCE_LANGUAGE_PREF_KEY));
+    return normalizeSourceLanguage(
+      localStorage.getItem(SOURCE_LANGUAGE_PREF_KEY),
+    );
   } catch {
     return "en";
   }
@@ -279,7 +343,11 @@ function setSelectedSourceFilters(
   }
 
   sourceFormatInputs.forEach((input) => {
-    input.checked = formatSet.has(String(input.value || "").trim().toLowerCase());
+    input.checked = formatSet.has(
+      String(input.value || "")
+        .trim()
+        .toLowerCase(),
+    );
   });
 }
 
@@ -314,7 +382,11 @@ function persistSourceResultsLimit(value) {
 function readSelectedSourceFormatsFromForm() {
   const selected = sourceFormatInputs
     .filter((input) => input.checked)
-    .map((input) => String(input.value || "").trim().toLowerCase());
+    .map((input) =>
+      String(input.value || "")
+        .trim()
+        .toLowerCase(),
+    );
   const normalized = normalizeSourceFormats(selected);
   return normalized.length ? normalized : [...supportedSourceFormats];
 }
@@ -328,7 +400,10 @@ function persistSourceFormats(formats) {
       localStorage.removeItem(SOURCE_ALLOWED_FORMATS_PREF_KEY);
       return safeFormats;
     }
-    localStorage.setItem(SOURCE_ALLOWED_FORMATS_PREF_KEY, JSON.stringify(safeFormats));
+    localStorage.setItem(
+      SOURCE_ALLOWED_FORMATS_PREF_KEY,
+      JSON.stringify(safeFormats),
+    );
     return safeFormats;
   } catch {
     return safeFormats;
@@ -364,7 +439,9 @@ function getSourceLanguageLabel(value) {
 }
 
 function normalizeSubtitleColor(value) {
-  const raw = String(value || "").trim().toLowerCase();
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
   if (/^#[0-9a-f]{6}$/.test(raw)) {
     return raw;
   }
@@ -376,7 +453,9 @@ function normalizeSubtitleColor(value) {
 
 function getStoredSubtitleColorPreference() {
   try {
-    return normalizeSubtitleColor(localStorage.getItem(SUBTITLE_COLOR_PREF_KEY));
+    return normalizeSubtitleColor(
+      localStorage.getItem(SUBTITLE_COLOR_PREF_KEY),
+    );
   } catch {
     return DEFAULT_SUBTITLE_COLOR;
   }
@@ -407,7 +486,9 @@ function persistSubtitleColorPreference(value) {
 }
 
 function normalizeAvatarStyle(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (supportedAvatarStyles.has(normalized)) {
     return normalized;
   }
@@ -415,12 +496,16 @@ function normalizeAvatarStyle(value) {
 }
 
 function normalizeAvatarMode(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   return normalized === "custom" ? "custom" : DEFAULT_AVATAR_MODE;
 }
 
 function normalizeAvatarChoice(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (supportedAvatarChoices.has(normalized)) {
     return normalized;
   }
@@ -442,7 +527,9 @@ function sanitizeAvatarImageData(value) {
 
 function getStoredAvatarStylePreference() {
   try {
-    return normalizeAvatarStyle(localStorage.getItem(PROFILE_AVATAR_STYLE_PREF_KEY));
+    return normalizeAvatarStyle(
+      localStorage.getItem(PROFILE_AVATAR_STYLE_PREF_KEY),
+    );
   } catch {
     return DEFAULT_AVATAR_STYLE;
   }
@@ -450,7 +537,9 @@ function getStoredAvatarStylePreference() {
 
 function getStoredAvatarModePreference() {
   try {
-    return normalizeAvatarMode(localStorage.getItem(PROFILE_AVATAR_MODE_PREF_KEY));
+    return normalizeAvatarMode(
+      localStorage.getItem(PROFILE_AVATAR_MODE_PREF_KEY),
+    );
   } catch {
     return DEFAULT_AVATAR_MODE;
   }
@@ -458,7 +547,9 @@ function getStoredAvatarModePreference() {
 
 function getStoredAvatarImagePreference() {
   try {
-    return sanitizeAvatarImageData(localStorage.getItem(PROFILE_AVATAR_IMAGE_PREF_KEY));
+    return sanitizeAvatarImageData(
+      localStorage.getItem(PROFILE_AVATAR_IMAGE_PREF_KEY),
+    );
   } catch {
     return "";
   }
@@ -472,8 +563,12 @@ function applyAvatarPreviewPreset(style) {
   avatarStylePreview.classList.remove("avatar-style-custom-image");
   avatarStylePreview.style.removeProperty("--avatar-image");
   avatarStylePreview.style.removeProperty("backgroundImage");
-  avatarStyleClassNames.forEach((className) => avatarStylePreview.classList.remove(className));
-  avatarStylePreview.classList.add(`avatar-style-${normalizeAvatarStyle(style)}`);
+  avatarStyleClassNames.forEach((className) =>
+    avatarStylePreview.classList.remove(className),
+  );
+  avatarStylePreview.classList.add(
+    `avatar-style-${normalizeAvatarStyle(style)}`,
+  );
 }
 
 function applyAvatarPreviewCustom(imageData) {
@@ -481,7 +576,9 @@ function applyAvatarPreviewCustom(imageData) {
     return;
   }
 
-  avatarStyleClassNames.forEach((className) => avatarStylePreview.classList.remove(className));
+  avatarStyleClassNames.forEach((className) =>
+    avatarStylePreview.classList.remove(className),
+  );
   avatarStylePreview.classList.add("avatar-style-custom-image");
   avatarStylePreview.style.setProperty("--avatar-image", `url("${imageData}")`);
   avatarStylePreview.style.backgroundImage = `var(--avatar-image)`;
@@ -494,7 +591,10 @@ function applyAvatarCustomThumb(imageData) {
 
   if (imageData) {
     avatarCustomThumb.classList.add("avatar-style-custom-image");
-    avatarCustomThumb.style.setProperty("--avatar-image", `url("${imageData}")`);
+    avatarCustomThumb.style.setProperty(
+      "--avatar-image",
+      `url("${imageData}")`,
+    );
     avatarCustomThumb.style.backgroundImage = "var(--avatar-image)";
     return;
   }
@@ -504,9 +604,14 @@ function applyAvatarCustomThumb(imageData) {
   avatarCustomThumb.style.removeProperty("backgroundImage");
 }
 
-function setSelectedAvatarChoice(choiceValue, customImage = pendingCustomAvatarImage) {
+function setSelectedAvatarChoice(
+  choiceValue,
+  customImage = pendingCustomAvatarImage,
+) {
   const choice = normalizeAvatarChoice(choiceValue);
-  const input = qualityForm?.querySelector(`input[name="avatarStyle"][value="${choice}"]`);
+  const input = qualityForm?.querySelector(
+    `input[name="avatarStyle"][value="${choice}"]`,
+  );
   if (input) {
     input.checked = true;
   }
@@ -519,7 +624,8 @@ function setSelectedAvatarChoice(choiceValue, customImage = pendingCustomAvatarI
     return;
   }
 
-  const fallbackStyle = choice === "custom" ? getStoredAvatarStylePreference() : choice;
+  const fallbackStyle =
+    choice === "custom" ? getStoredAvatarStylePreference() : choice;
   applyAvatarPreviewPreset(fallbackStyle);
 }
 
@@ -583,7 +689,9 @@ function getAvatarChoiceDisplayLabel(choiceValue) {
 
 function setSelectedQuality(value) {
   const normalized = normalizeStreamQualityPreference(value);
-  const input = qualityForm?.querySelector(`input[name="quality"][value="${normalized}"]`);
+  const input = qualityForm?.querySelector(
+    `input[name="quality"][value="${normalized}"]`,
+  );
   if (input) {
     input.checked = true;
   }
@@ -686,28 +794,45 @@ qualityForm?.addEventListener("submit", (event) => {
   event.preventDefault();
 
   const formData = new FormData(qualityForm);
-  const selectedQuality = normalizeStreamQualityPreference(formData.get("quality") || "auto");
-  const selectedAvatarChoice = normalizeAvatarChoice(formData.get("avatarStyle") || DEFAULT_AVATAR_STYLE);
-  const selectedSourceMinSeeders = normalizeSourceMinSeeders(formData.get("sourceMinSeeders") || 0);
+  const selectedQuality = normalizeStreamQualityPreference(
+    formData.get("quality") || "auto",
+  );
+  const selectedAvatarChoice = normalizeAvatarChoice(
+    formData.get("avatarStyle") || DEFAULT_AVATAR_STYLE,
+  );
+  const selectedSourceMinSeeders = normalizeSourceMinSeeders(
+    formData.get("sourceMinSeeders") || 0,
+  );
   const selectedSourceResultsLimit = normalizeSourceResultsLimit(
     formData.get("sourceResultsLimit") || DEFAULT_SOURCE_RESULTS_LIMIT,
   );
   const selectedSourceFormats = readSelectedSourceFormatsFromForm();
-  const selectedSourceLanguage = normalizeSourceLanguage(formData.get("sourceLanguage") || "en");
-  const selectedNativePlaybackMode = normalizeNativePlaybackMode(formData.get("nativePlaybackMode") || "auto");
-  const selectedRemuxVideoMode = normalizeRemuxVideoMode(formData.get("remuxVideoMode") || "auto");
+  const selectedSourceLanguage = normalizeSourceLanguage(
+    formData.get("sourceLanguage") || "en",
+  );
+  const selectedNativePlaybackMode = normalizeNativePlaybackMode(
+    formData.get("nativePlaybackMode") || "auto",
+  );
+  const selectedRemuxVideoMode = normalizeRemuxVideoMode(
+    formData.get("remuxVideoMode") || "auto",
+  );
 
   const savedQuality = persistSelectedQuality(selectedQuality);
-  const savedSubtitleColor = persistSubtitleColorPreference(subtitleColorInput?.value);
+  const savedSubtitleColor = persistSubtitleColorPreference(
+    subtitleColorInput?.value,
+  );
   setSelectedQuality(savedQuality);
   setSelectedSubtitleColor(savedSubtitleColor);
 
   let savedAvatarChoiceLabel = "";
   if (selectedAvatarChoice === "custom") {
-    const customImage = sanitizeAvatarImageData(pendingCustomAvatarImage || getStoredAvatarImagePreference());
+    const customImage = sanitizeAvatarImageData(
+      pendingCustomAvatarImage || getStoredAvatarImagePreference(),
+    );
     if (!customImage) {
       if (saveStatus) {
-        saveStatus.textContent = "Choose an image first for custom profile icon.";
+        saveStatus.textContent =
+          "Choose an image first for custom profile icon.";
       }
       return;
     }
@@ -724,11 +849,17 @@ qualityForm?.addEventListener("submit", (event) => {
     savedAvatarChoiceLabel = getAvatarChoiceDisplayLabel(savedStyle);
   }
 
-  const savedSourceMinSeeders = persistSourceMinSeeders(selectedSourceMinSeeders);
-  const savedSourceResultsLimit = persistSourceResultsLimit(selectedSourceResultsLimit);
+  const savedSourceMinSeeders = persistSourceMinSeeders(
+    selectedSourceMinSeeders,
+  );
+  const savedSourceResultsLimit = persistSourceResultsLimit(
+    selectedSourceResultsLimit,
+  );
   const savedSourceFormats = persistSourceFormats(selectedSourceFormats);
   const savedSourceLanguage = persistSourceLanguage(selectedSourceLanguage);
-  const savedNativePlaybackMode = persistNativePlaybackMode(selectedNativePlaybackMode);
+  const savedNativePlaybackMode = persistNativePlaybackMode(
+    selectedNativePlaybackMode,
+  );
   const savedRemuxVideoMode = persistRemuxVideoMode(selectedRemuxVideoMode);
   setSelectedSourceFilters(
     savedSourceMinSeeders,
@@ -740,19 +871,25 @@ qualityForm?.addEventListener("submit", (event) => {
   setSelectedRemuxVideoMode(savedRemuxVideoMode);
 
   if (saveStatus) {
-    const qualityLabel = savedQuality === "auto" ? "Auto (Best Available)" : savedQuality.toUpperCase();
-    const formatsLabel = savedSourceFormats.length === supportedSourceFormats.length
-      ? "Any format"
-      : savedSourceFormats.map((value) => value.toUpperCase()).join(", ");
-    const seedsLabel = savedSourceMinSeeders > 0 ? `${savedSourceMinSeeders}+ seeds` : "Any seeds";
+    const qualityLabel =
+      savedQuality === "auto"
+        ? "Auto (Best Available)"
+        : savedQuality.toUpperCase();
+    const formatsLabel = "MP4 only";
+    const seedsLabel =
+      savedSourceMinSeeders > 0
+        ? `${savedSourceMinSeeders}+ seeds`
+        : "Any seeds";
     const resultsLabel = `top ${savedSourceResultsLimit} by seeds`;
     const sourceLanguageLabel = getSourceLanguageLabel(savedSourceLanguage);
-    const nativePlaybackLabel = savedNativePlaybackMode === "off"
-      ? "Browser only"
-      : "Auto (mpv)";
-    const remuxModeLabel = savedRemuxVideoMode === "normalize"
-      ? "Normalize (best sync)"
-      : (savedRemuxVideoMode === "copy" ? "Copy (fastest)" : "Auto");
+    const nativePlaybackLabel =
+      savedNativePlaybackMode === "off" ? "Browser only" : "Auto (mpv)";
+    const remuxModeLabel =
+      savedRemuxVideoMode === "normalize"
+        ? "Normalize (best sync)"
+        : savedRemuxVideoMode === "copy"
+          ? "Copy (fastest)"
+          : "Auto";
     saveStatus.textContent = `Saved: ${qualityLabel}, subtitles ${savedSubtitleColor.toUpperCase()}, icon ${savedAvatarChoiceLabel}, sources ${seedsLabel}, ${resultsLabel}, ${formatsLabel}, ${sourceLanguageLabel}, playback ${nativePlaybackLabel}, remux ${remuxModeLabel}`;
   }
 });
@@ -773,7 +910,9 @@ const storedAvatarMode = getStoredAvatarModePreference();
 const storedAvatarImage = getStoredAvatarImagePreference();
 pendingCustomAvatarImage = storedAvatarImage;
 setSelectedAvatarChoice(
-  storedAvatarMode === "custom" && storedAvatarImage ? "custom" : storedAvatarStyle,
+  storedAvatarMode === "custom" && storedAvatarImage
+    ? "custom"
+    : storedAvatarStyle,
   storedAvatarImage,
 );
 
@@ -807,11 +946,13 @@ avatarImageInput?.addEventListener("change", async () => {
     pendingCustomAvatarImage = preparedImage;
     setSelectedAvatarChoice("custom", preparedImage);
     if (avatarUploadHint) {
-      avatarUploadHint.textContent = "Image ready. Click Save Preference to apply.";
+      avatarUploadHint.textContent =
+        "Image ready. Click Save Preference to apply.";
     }
   } catch (error) {
     if (avatarUploadHint) {
-      avatarUploadHint.textContent = error instanceof Error ? error.message : "Failed to load image.";
+      avatarUploadHint.textContent =
+        error instanceof Error ? error.message : "Failed to load image.";
     }
   } finally {
     avatarImageInput.value = "";
@@ -823,7 +964,9 @@ clearAllCachesBtn?.addEventListener("click", async () => {
     return;
   }
 
-  const shouldProceed = window.confirm("Clear all server caches for every title?");
+  const shouldProceed = window.confirm(
+    "Clear all server caches for every title?",
+  );
   if (!shouldProceed) {
     return;
   }
@@ -842,16 +985,23 @@ clearAllCachesBtn?.addEventListener("click", async () => {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const errorMessage = payload?.error || payload?.message || `Request failed (${response.status})`;
+      const errorMessage =
+        payload?.error ||
+        payload?.message ||
+        `Request failed (${response.status})`;
       throw new Error(errorMessage);
     }
 
     const persistent = payload?.caches?.persistentDb || {};
     const sourceCount = Number(persistent.resolvedStreamSize || 0);
     const tmdbCount = Number(persistent.tmdbResponseSize || 0);
-    setCacheClearStatus(`Done. Server cache cleared (sources ${sourceCount}, TMDB ${tmdbCount}).`, "success");
+    setCacheClearStatus(
+      `Done. Server cache cleared (sources ${sourceCount}, TMDB ${tmdbCount}).`,
+      "success",
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to clear cache.";
+    const message =
+      error instanceof Error ? error.message : "Failed to clear cache.";
     setCacheClearStatus(message, "error");
   } finally {
     isClearingCaches = false;
