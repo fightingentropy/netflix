@@ -364,7 +364,7 @@ Response headers expose sync/debug metadata:
 HLS is job-based:
 
 - one transcode job per `(input, audioStreamIndex)` key
-- ffmpeg segmenter writes `.ts` files and playlist in `.hls-cache`
+- ffmpeg segmenter writes `.ts` files and playlist in `cache/hls`
 - segment requests wait for segment file availability
 - job fallback path from hwaccel to software if needed
 - idle jobs are pruned
@@ -411,7 +411,7 @@ Server external subtitle path (`/api/subtitles.external.vtt`):
 2. API validates provider download URL host allowlist
 3. on request, server fetches subtitle payload and decompresses `.gz` when needed
 4. subtitle text is normalized to WebVTT (or passed through if already VTT)
-5. VTT response is cached in `.hls-cache` with in-flight dedupe
+5. VTT response is cached in `cache/hls` with in-flight dedupe
 
 Prewarm behavior:
 
@@ -459,7 +459,7 @@ Additional remux timestamp normalization:
 
 DB file:
 
-- `.resolver-cache.sqlite`
+- `cache/resolver-cache.sqlite`
 
 Primary persistent tables:
 

@@ -1,5 +1,6 @@
 import { join, normalize } from "node:path";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 
@@ -40,8 +41,9 @@ const RESOLVED_STREAM_CACHE_TTL_MS = 20 * 60 * 1000;
 const RESOLVED_STREAM_CACHE_EPHEMERAL_TTL_MS = 12 * 60 * 60 * 1000;
 const RESOLVED_STREAM_CACHE_EPHEMERAL_REVALIDATE_MS = 90 * 1000;
 const RESOLVED_STREAM_CACHE_MAX_ENTRIES = 800;
-const PERSISTENT_CACHE_DB_PATH = join(ROOT_DIR, ".resolver-cache.sqlite");
-const HLS_CACHE_DIR = join(ROOT_DIR, ".hls-cache");
+const CACHE_DIR = join(ROOT_DIR, "cache");
+const PERSISTENT_CACHE_DB_PATH = join(CACHE_DIR, "resolver-cache.sqlite");
+const HLS_CACHE_DIR = join(CACHE_DIR, "hls");
 const RESOLVED_STREAM_PERSIST_MAX_ENTRIES = 6000;
 const resolvedStreamCache = new Map();
 const MOVIE_QUICK_START_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -270,6 +272,7 @@ const SUBTITLE_RELEASE_NOISE_TOKENS = new Set([
 
 function initializePersistentCacheDb() {
   try {
+    mkdirSync(CACHE_DIR, { recursive: true });
     const db = new Database(PERSISTENT_CACHE_DB_PATH, { create: true });
     db.exec(`
       PRAGMA journal_mode = WAL;
@@ -584,45 +587,6 @@ function shouldPreferSoftwareDecodeSource(source, filename = "") {
     normalizedFilename.endsWith(".ts") ||
     normalizedFilename.endsWith(".m3u8")
   );
-}
-
-function shouldAttemptRemuxSource(source, filename = "") {
-  const normalizedSource = String(source || "").toLowerCase();
-  const normalizedFilename = String(filename || "").toLowerCase();
-  const combined = `${normalizedSource} ${normalizedFilename}`;
-
-  if (!combined.trim()) {
-    return false;
-  }
-
-  if (combined.includes(".m3u8")) {
-    return false;
-  }
-
-  return (
-    combined.includes(".mkv") ||
-    combined.includes(".avi") ||
-    combined.includes(".wmv") ||
-    combined.includes(".mov") ||
-    combined.includes(".ts") ||
-    combined.includes(".m2ts") ||
-    combined.includes(".mpg") ||
-    combined.includes(".mpeg")
-  );
-}
-
-function shouldWrapWithRemuxFallback(source) {
-  const value = String(source || "").toLowerCase();
-  if (!value || isPlaybackProxyUrl(value)) {
-    return false;
-  }
-
-  // Wrapping transient RD stream MP4 URLs often leads to FFmpeg open-context hangs.
-  if (value.includes("stream.real-debrid.com") && value.includes(".mp4")) {
-    return false;
-  }
-
-  return true;
 }
 
 function resolveTranscodeInput(rawInput) {

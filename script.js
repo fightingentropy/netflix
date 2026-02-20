@@ -48,9 +48,6 @@ const JEFFREY_EPSTEIN_SERIES_ID = "jeffrey-epstein-filthy-rich";
 const JEFFREY_EPSTEIN_EPISODE_1_SOURCE =
   "assets/videos/Jeffrey.Epstein.Filthy.Rich.S01E01.2160p.NF.WEB-DL.DDP5.1.SDR.HEVC-DiSGUSTiNG.mp4";
 const BREAKING_BAD_SERIES_ID = "breaking-bad";
-const LOCAL_TATE_LEGACY_SOURCE = "assets/videos/tate-full.mp4";
-const LOCAL_TATE_SOURCE = "assets/videos/local/tate-part-1/video.mp4";
-const LOCAL_TATE_THUMBNAIL = "assets/videos/local/tate-part-1/thumbnail.jpg";
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de"]);
 const supportedStreamQualityPreferences = new Set([
   "auto",
@@ -245,14 +242,6 @@ function readContinueWatchingMetaMap() {
   }
 }
 
-function isLocalTateSource(sourceIdentity) {
-  const normalizedSource = String(sourceIdentity || "").trim();
-  return (
-    normalizedSource === LOCAL_TATE_LEGACY_SOURCE ||
-    normalizedSource === LOCAL_TATE_SOURCE
-  );
-}
-
 function extractSeriesIdFromSourceIdentity(sourceIdentity) {
   const normalizedSource = String(sourceIdentity || "").trim();
   if (!normalizedSource) {
@@ -282,14 +271,6 @@ function parseTmdbSourceIdentity(sourceIdentity) {
         .trim()
         .toLowerCase(),
       tmdbId: String(typedMatch[2] || "").trim(),
-    };
-  }
-
-  const legacyMatch = /^tmdb:(\d+)$/i.exec(normalizedSource);
-  if (legacyMatch) {
-    return {
-      mediaType: "movie",
-      tmdbId: String(legacyMatch[1] || "").trim(),
     };
   }
 
@@ -339,9 +320,7 @@ function removeResumeEntriesForSource(
         }
       }
     } else {
-      // Clear modern and legacy movie source identities for the same TMDB title.
       keysToDelete.add(`${RESUME_STORAGE_PREFIX}tmdb:movie:${tmdbId}`);
-      keysToDelete.add(`${RESUME_STORAGE_PREFIX}tmdb:${tmdbId}`);
     }
   }
 
@@ -472,19 +451,6 @@ function normalizeLocalContinueEntry(entry) {
   safeEntry.episodeIndex = Number.isFinite(Number(safeEntry.episodeIndex))
     ? Math.max(0, Math.floor(Number(safeEntry.episodeIndex)))
     : -1;
-  if (!isLocalTateSource(safeEntry.sourceIdentity)) {
-    return safeEntry;
-  }
-
-  safeEntry.title = "Tate - Part 1";
-  safeEntry.episode = "Part 1";
-  safeEntry.thumb = LOCAL_TATE_THUMBNAIL;
-  safeEntry.src = LOCAL_TATE_SOURCE;
-  safeEntry.mediaType = "";
-  safeEntry.tmdbId = "";
-  safeEntry.seriesId = "";
-  safeEntry.episodeIndex = -1;
-  safeEntry.year = safeEntry.year || "2023";
   return safeEntry;
 }
 
@@ -540,9 +506,6 @@ function getContinueWatchingEntries() {
   const entriesBySource = new Map();
   const metaMap = readContinueWatchingMetaMap();
   const dedupeKeyForSource = (sourceIdentity, explicitSeriesId = "") => {
-    if (isLocalTateSource(sourceIdentity)) {
-      return "local:tate-part-1";
-    }
     const normalizedSeriesId =
       String(explicitSeriesId || "")
         .trim()
@@ -672,8 +635,6 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
     entry.seriesId,
   );
   const isSeriesEntry = normalizedMediaType === "tv";
-  const isPodcastEntry =
-    !tmdbDetails && isLocalTateSource(entry.sourceIdentity);
   const title =
     (isSeriesEntry
       ? tmdbDetails?.name || tmdbDetails?.title
@@ -715,22 +676,12 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
     .slice(0, 3);
   const tagLine = genreNames.length
     ? genreNames.map(escapeHtml).join(" <span>&bull;</span> ")
-    : isPodcastEntry
-      ? "Interview <span>&bull;</span> Longform <span>&bull;</span> Talk"
-      : "Continue <span>&bull;</span> Resume";
+    : "Continue <span>&bull;</span> Resume";
   const safeTitle = escapeHtml(title);
-  const safeDescription =
-    tmdbDetails?.overview ||
-    (isPodcastEntry
-      ? "Resume this podcast episode where you left off."
-      : "Resume where you left off.");
-  const maturity = isPodcastEntry ? "18" : tmdbDetails?.adult ? "18" : "13+";
-  const qualityLabel = isPodcastEntry ? "VIDEO" : "HD";
-  const contentTypeLabel = isPodcastEntry
-    ? "Podcast"
-    : isSeriesEntry
-      ? "Series"
-      : "Movie";
+  const safeDescription = tmdbDetails?.overview || "Resume where you left off.";
+  const maturity = tmdbDetails?.adult ? "18" : "13+";
+  const qualityLabel = "HD";
+  const contentTypeLabel = isSeriesEntry ? "Series" : "Movie";
   const cast = (tmdbDetails?.credits?.cast || [])
     .slice(0, 4)
     .map((person) => person?.name)
@@ -749,24 +700,16 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
   card.dataset.runtime =
     runtimeMinutes > 0
       ? formatRuntime(runtimeMinutes)
-      : isPodcastEntry
-        ? "Episode"
-        : isSeriesEntry
-          ? "Series"
-          : "Movie";
+      : isSeriesEntry
+        ? "Series"
+        : "Movie";
   card.dataset.maturity = maturity;
   card.dataset.quality = qualityLabel;
-  card.dataset.audio = isPodcastEntry ? "Podcast Audio" : "Stereo";
+  card.dataset.audio = "Stereo";
   card.dataset.description = safeDescription;
   card.dataset.cast = cast || "Cast details unavailable.";
-  card.dataset.genres = genreNames.length
-    ? genreNames.join(", ")
-    : isPodcastEntry
-      ? "Podcast, Interview"
-      : "Movie";
-  card.dataset.vibe = isPodcastEntry
-    ? "Interview, Longform, Conversational"
-    : "Continue watching";
+  card.dataset.genres = genreNames.length ? genreNames.join(", ") : "Movie";
+  card.dataset.vibe = "Continue watching";
   card.dataset.tmdbId = entry.tmdbId || "";
   card.dataset.mediaType = normalizedMediaType || entry.mediaType || "";
   card.dataset.seriesId = entry.seriesId || "";
@@ -1510,7 +1453,7 @@ function attachCardInteractions(card) {
     const resumeSource =
       String(card.dataset.resumeSource || "").trim() ||
       (card.dataset.tmdbId && card.dataset.mediaType === "movie"
-        ? `tmdb:${String(card.dataset.tmdbId).trim()}`
+        ? `tmdb:movie:${String(card.dataset.tmdbId).trim()}`
         : String(card.dataset.src || "").trim());
 
     if (!resumeSource) {

@@ -11,11 +11,7 @@ dist/
 !.env.example
 
 # Local playback/cache artifacts
-.hls-cache/
-.tmp-thumbs/
-.resolver-cache.sqlite
-.resolver-cache.sqlite-shm
-.resolver-cache.sqlite-wal
+cache/
 
 # Large local media files
 *.mkv

@@ -85,9 +85,6 @@ let hasHydratedSeriesEpisodeThumbs = false;
 
 const params = new URLSearchParams(window.location.search);
 const DEFAULT_TRAILER_SOURCE = "assets/videos/intro.mp4";
-const LOCAL_TATE_LEGACY_SOURCE = "assets/videos/tate-full.mp4";
-const LOCAL_TATE_SOURCE = "assets/videos/local/tate-part-1/video.mp4";
-const LOCAL_TATE_THUMBNAIL = "assets/videos/local/tate-part-1/thumbnail.jpg";
 const DEFAULT_EPISODE_THUMBNAIL = "assets/images/thumbnail.jpg";
 const JEFFREY_EPSTEIN_EPISODE_1_SOURCE =
   "assets/videos/Jeffrey.Epstein.Filthy.Rich.S01E01.2160p.NF.WEB-DL.DDP5.1.SDR.HEVC-DiSGUSTiNG.mp4";
@@ -251,10 +248,8 @@ const rawTitle = isSeriesPlayback
 const rawEpisode = isSeriesPlayback
   ? `E${seriesEpisodeIndex + 1} ${activeSeriesEpisode.title}`
   : params.get("episode") || "Official Trailer";
-const isLocalTatePlayback =
-  src === LOCAL_TATE_LEGACY_SOURCE || src === LOCAL_TATE_SOURCE;
-const title = isLocalTatePlayback ? "Tate - Part 1" : rawTitle;
-const episode = isLocalTatePlayback ? "" : rawEpisode;
+const title = rawTitle;
+const episode = rawEpisode;
 const tmdbId = String(
   activeSeries?.tmdbId || params.get("tmdbId") || "",
 ).trim();
@@ -898,41 +893,19 @@ function readContinueWatchingMetaMap() {
   }
 }
 
-function isLocalTateSource(sourceValue) {
-  const normalizedSource = String(sourceValue || "").trim();
-  return (
-    normalizedSource === LOCAL_TATE_LEGACY_SOURCE ||
-    normalizedSource === LOCAL_TATE_SOURCE
-  );
-}
-
 function getCanonicalContinueWatchingMetadata() {
-  if (!isLocalTateSource(sourceIdentity)) {
-    return {
-      title: String(title || "Title"),
-      episode: String(episode || "Now Playing"),
-      src: String(src || ""),
-      tmdbId: String(tmdbId || ""),
-      mediaType: String(mediaType || ""),
-      seriesId: isSeriesPlayback ? String(activeSeries.id || "") : "",
-      episodeIndex: isSeriesPlayback ? seriesEpisodeIndex : -1,
-      year: String(year || ""),
-      thumb: isSeriesPlayback
-        ? String(activeSeriesEpisode?.thumb || DEFAULT_EPISODE_THUMBNAIL)
-        : "",
-    };
-  }
-
   return {
-    title: "Tate - Part 1",
-    episode: "",
-    src: LOCAL_TATE_SOURCE,
-    tmdbId: "",
-    mediaType: "",
-    seriesId: "",
-    episodeIndex: -1,
-    year: "2023",
-    thumb: LOCAL_TATE_THUMBNAIL,
+    title: String(title || "Title"),
+    episode: String(episode || "Now Playing"),
+    src: String(src || ""),
+    tmdbId: String(tmdbId || ""),
+    mediaType: String(mediaType || ""),
+    seriesId: isSeriesPlayback ? String(activeSeries.id || "") : "",
+    episodeIndex: isSeriesPlayback ? seriesEpisodeIndex : -1,
+    year: String(year || ""),
+    thumb: isSeriesPlayback
+      ? String(activeSeriesEpisode?.thumb || DEFAULT_EPISODE_THUMBNAIL)
+      : "",
   };
 }
 
