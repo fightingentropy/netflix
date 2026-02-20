@@ -3528,13 +3528,19 @@ async function createFfmpegProxyResponse(
     }
   }
 
+  const probeFormat = String(probe?.formatName || "").toLowerCase();
+  const probeLooksLikeMatroska =
+    probeFormat.includes("matroska") || probeFormat.includes("webm");
+  const shouldApplyAutoAudioDelay =
+    AUTO_AUDIO_SYNC_ENABLED &&
+    probe &&
+    (looksLikeMatroskaSource ||
+      probeLooksLikeMatroska ||
+      resolvedVideoMode === "normalize");
   let autoAudioDelayMs = 0;
-  if (AUTO_AUDIO_SYNC_ENABLED && probe) {
+  if (shouldApplyAutoAudioDelay) {
     try {
       const videoStart = Number(probe?.videoStartTimeSeconds || 0);
-      const videoBFrameLead = Number(probe?.videoBFrameLeadSeconds || 0);
-      const videoFrameRateFps = Number(probe?.videoFrameRateFps || 0);
-      const videoBFrames = Number(probe?.videoBFrames || 0);
       const audioTracks = Array.isArray(probe?.audioTracks)
         ? probe.audioTracks
         : [];
@@ -3546,17 +3552,12 @@ async function createFfmpegProxyResponse(
         null;
       const audioStart = Number(selectedAudioTrack?.startTimeSeconds || 0);
       const timestampOffsetSeconds = videoStart - audioStart;
-      let offsetSeconds = Math.max(timestampOffsetSeconds, videoBFrameLead);
-      if (videoBFrames > 0 && videoFrameRateFps > 0) {
-        const safetyOffset = (videoBFrames + 1) / videoFrameRateFps;
-        offsetSeconds = Math.max(offsetSeconds, safetyOffset);
-      }
       if (
-        Number.isFinite(offsetSeconds) &&
-        offsetSeconds > 0.01 &&
-        offsetSeconds < 1.5
+        Number.isFinite(timestampOffsetSeconds) &&
+        timestampOffsetSeconds > 0.04 &&
+        timestampOffsetSeconds < 1.5
       ) {
-        autoAudioDelayMs = Math.round(offsetSeconds * 1000);
+        autoAudioDelayMs = Math.round(timestampOffsetSeconds * 1000);
       }
     } catch {
       autoAudioDelayMs = 0;

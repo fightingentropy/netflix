@@ -1635,9 +1635,7 @@ function renderSourceOptionButtons() {
   }
   if (
     preferredDefaultSourceHash &&
-    (!sourceSelectionPinned ||
-      !hasSelectedInOptions ||
-      normalizedSelectedSourceHash !== preferredDefaultSourceHash)
+    (!sourceSelectionPinned || !hasSelectedInOptions)
   ) {
     selectedSourceHash = preferredDefaultSourceHash;
     applyPreferredSourceAudioSync(selectedSourceHash);
