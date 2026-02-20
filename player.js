@@ -233,6 +233,7 @@ const hasSeriesEpisodeControls =
   hasRequestedEpisodeIndexParam &&
   Boolean(activeSeries && seriesEpisodes.length > 1);
 const rawSourceParam = String(params.get("src") || "").trim();
+const thumbParam = String(params.get("thumb") || "").trim();
 const src = isSeriesPlayback
   ? String(activeSeriesEpisode?.src || "").trim()
   : rawSourceParam;
@@ -905,7 +906,7 @@ function getCanonicalContinueWatchingMetadata() {
     year: String(year || ""),
     thumb: isSeriesPlayback
       ? String(activeSeriesEpisode?.thumb || DEFAULT_EPISODE_THUMBNAIL)
-      : "",
+      : thumbParam,
   };
 }
 

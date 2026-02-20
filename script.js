@@ -48,6 +48,9 @@ const JEFFREY_EPSTEIN_SERIES_ID = "jeffrey-epstein-filthy-rich";
 const JEFFREY_EPSTEIN_EPISODE_1_SOURCE =
   "assets/videos/Jeffrey.Epstein.Filthy.Rich.S01E01.2160p.NF.WEB-DL.DDP5.1.SDR.HEVC-DiSGUSTiNG.mp4";
 const BREAKING_BAD_SERIES_ID = "breaking-bad";
+const PRIDE_PREJUDICE_SOURCE =
+  "assets/videos/Pride.Prejudice.2005.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.MX].mp4";
+const PRIDE_PREJUDICE_THUMBNAIL = "assets/images/pride-prejudice-thumb.jpg";
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de"]);
 const supportedStreamQualityPreferences = new Set([
   "auto",
@@ -651,7 +654,9 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
     tmdbDetails?.backdrop_path || tmdbDetails?.poster_path || "";
   const posterUrl = posterPath
     ? `${TMDB_IMAGE_BASE}/w500${posterPath}`
-    : entry.thumb || "assets/images/thumbnail.jpg";
+    : entry.thumb ||
+      getFallbackThumbnailForSource(entry.src || entry.sourceIdentity) ||
+      "assets/images/thumbnail.jpg";
   const heroUrl = backdropPath
     ? `${TMDB_IMAGE_BASE}/original${backdropPath}`
     : posterUrl;
@@ -756,6 +761,17 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
   `;
 
   return card;
+}
+
+function getFallbackThumbnailForSource(sourceValue) {
+  const normalizedSource = String(sourceValue || "").trim();
+  if (!normalizedSource) {
+    return "";
+  }
+  if (normalizedSource === PRIDE_PREJUDICE_SOURCE) {
+    return PRIDE_PREJUDICE_THUMBNAIL;
+  }
+  return "";
 }
 
 async function apiFetch(path, params = {}) {
@@ -949,8 +965,91 @@ function buildCardFromTmdbSeries(item, imageBase = TMDB_IMAGE_BASE) {
   return card;
 }
 
+function buildPridePrejudiceCard() {
+  const title = "Pride & Prejudice";
+  const year = "2005";
+  const maturity = "13+";
+  const qualityLabel = "4K";
+  const posterUrl = PRIDE_PREJUDICE_THUMBNAIL;
+  const heroUrl = PRIDE_PREJUDICE_THUMBNAIL;
+  const safeTitle = escapeHtml(title);
+  const tagLine =
+    "Romance <span>&bull;</span> Period Drama <span>&bull;</span> Classic";
+
+  const card = document.createElement("article");
+  card.className = "card";
+  card.tabIndex = 0;
+  card.dataset.title = title;
+  card.dataset.episode = "Feature Film";
+  card.dataset.src = PRIDE_PREJUDICE_SOURCE;
+  card.dataset.thumb = heroUrl;
+  card.dataset.year = year;
+  card.dataset.runtime = "2h 9m";
+  card.dataset.maturity = maturity;
+  card.dataset.quality = qualityLabel;
+  card.dataset.audio = "5.1";
+  card.dataset.description =
+    "Sparks fly when Elizabeth Bennet meets Mr. Darcy in this sweeping adaptation of Jane Austen's beloved novel.";
+  card.dataset.cast = "Keira Knightley, Matthew Macfadyen, Rosamund Pike";
+  card.dataset.genres = "Romance, Drama";
+  card.dataset.vibe = "Romantic, Witty, Period";
+  card.dataset.mediaType = "movie";
+
+  card.innerHTML = `
+    <div class="card-base">
+      <img src="${posterUrl}" alt="${safeTitle}" loading="lazy" />
+      <div class="progress"><span style="width: 92%"></span></div>
+    </div>
+    <div class="card-hover">
+      <img class="card-hover-image" src="${heroUrl}" alt="${safeTitle} preview" loading="lazy" />
+      <div class="card-hover-body">
+        <div class="card-hover-controls">
+          <div class="card-hover-actions">
+            <button class="hover-round hover-play" type="button" aria-label="Play ${safeTitle}">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5v17L20 12 5 3.5Z" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Added to my list">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5L19.5 7.5" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Remove from continue watching">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke-linecap="round" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Rate thumbs up">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20H5.8A1.8 1.8 0 0 1 4 18.2V10a1.8 1.8 0 0 1 1.8-1.8H8V20Zm2 0h6a3.5 3.5 0 0 0 3.4-2.8l.8-4A2.5 2.5 0 0 0 17.75 10H14V6.6A2.6 2.6 0 0 0 11.4 4L10 9.3V20Z" /></svg>
+            </button>
+          </div>
+          <button class="hover-round hover-details" type="button" aria-label="More details">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+        </div>
+        <div class="card-hover-meta">
+          <span class="meta-age">${maturity}</span>
+          <span>${year}</span>
+          <span class="meta-chip">${qualityLabel}</span>
+          <span class="meta-spatial">Movie</span>
+        </div>
+        <p class="card-hover-tags">${tagLine}</p>
+      </div>
+    </div>
+  `;
+
+  return card;
+}
+
+function renderPopularCards(cardsToRender) {
+  cardsContainer.innerHTML = "";
+  cardsToRender.forEach((card, index) => {
+    if (index >= Math.max(1, cardsToRender.length - 2)) {
+      card.classList.add("card--align-right");
+    }
+    cardsContainer.appendChild(card);
+    attachCardInteractions(card);
+  });
+}
+
 async function loadPopularTitles() {
   if (!cardsContainer) return;
+  const cardsToRender = [buildPridePrejudiceCard()];
 
   try {
     const [
@@ -1018,25 +1117,17 @@ async function loadPopularTitles() {
 
     const imageBase = payload.imageBase || TMDB_IMAGE_BASE;
 
-    cardsContainer.innerHTML = "";
-    const cardsToRender = [];
     if (breakingBadSeries) {
       cardsToRender.push(buildCardFromTmdbSeries(breakingBadSeries, imageBase));
     }
     popularMovies.forEach((item) => {
       cardsToRender.push(buildCardFromTmdb(item, genreMap, imageBase));
     });
-
-    cardsToRender.forEach((card, index) => {
-      if (index >= Math.max(1, cardsToRender.length - 2)) {
-        card.classList.add("card--align-right");
-      }
-      cardsContainer.appendChild(card);
-      attachCardInteractions(card);
-    });
   } catch (error) {
     console.error("Failed to load TMDB popular movie titles:", error);
   }
+
+  renderPopularCards(cardsToRender);
 }
 
 async function loadContinueWatching() {
@@ -1171,6 +1262,7 @@ function openPlayerPage({
   title,
   episode,
   src,
+  thumb,
   tmdbId,
   mediaType,
   year,
@@ -1195,6 +1287,9 @@ function openPlayerPage({
 
   if (src) {
     params.set("src", src);
+  }
+  if (thumb) {
+    params.set("thumb", thumb);
   }
 
   if (tmdbId) {
@@ -1243,6 +1338,10 @@ function getCardDetails(card) {
     title: card.dataset.title || "Title",
     episode: card.dataset.episode || "Now Playing",
     src: card.dataset.src || "",
+    thumb:
+      card.dataset.thumb ||
+      card.querySelector("img")?.getAttribute("src") ||
+      "",
     tmdbId: card.dataset.tmdbId || "",
     mediaType: card.dataset.mediaType || "",
     seriesId: card.dataset.seriesId || "",
