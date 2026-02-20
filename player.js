@@ -89,6 +89,8 @@ const LOCAL_TATE_LEGACY_SOURCE = "assets/videos/tate-full.mp4";
 const LOCAL_TATE_SOURCE = "assets/videos/local/tate-part-1/video.mp4";
 const LOCAL_TATE_THUMBNAIL = "assets/videos/local/tate-part-1/thumbnail.jpg";
 const DEFAULT_EPISODE_THUMBNAIL = "assets/images/thumbnail.jpg";
+const JEFFREY_EPSTEIN_EPISODE_1_SOURCE =
+  "assets/videos/Jeffrey.Epstein.Filthy.Rich.S01E01.2160p.NF.WEB-DL.DDP5.1.SDR.HEVC-DiSGUSTiNG.mp4";
 const SERIES_LIBRARY = Object.freeze({
   "jeffrey-epstein-filthy-rich": {
     id: "jeffrey-epstein-filthy-rich",
@@ -96,12 +98,14 @@ const SERIES_LIBRARY = Object.freeze({
     tmdbId: "103506",
     year: "2020",
     preferredContainer: "mp4",
+    requiresLocalEpisodeSources: true,
     episodes: [
       {
         title: "Hunting Grounds",
         description:
           'Survivors recount how Epstein abused, manipulated and silenced them as he ran a so-called molestation "pyramid scheme" out of his Palm Beach mansion.',
-        thumb: "assets/images/thumbnail-top10-h.jpg",
+        thumb: "assets/images/jeffrey-epstein-s01e01-thumb.jpg",
+        src: JEFFREY_EPSTEIN_EPISODE_1_SOURCE,
         seasonNumber: 1,
         episodeNumber: 1,
       },
@@ -2769,6 +2773,20 @@ function getSeriesEpisodeLabel(index, episodeTitle) {
   return `E${index + 1} ${String(episodeTitle || "").trim()}`;
 }
 
+function seriesRequiresLocalEpisodeSources(seriesEntry = activeSeries) {
+  return Boolean(seriesEntry?.requiresLocalEpisodeSources);
+}
+
+function isSeriesEpisodePlayable(episodeEntry, seriesEntry = activeSeries) {
+  if (!episodeEntry) {
+    return false;
+  }
+  if (!seriesRequiresLocalEpisodeSources(seriesEntry)) {
+    return true;
+  }
+  return Boolean(String(episodeEntry?.src || "").trim());
+}
+
 function getSeriesEpisodeSeasonNumber(episodeEntry) {
   const parsed = Number(episodeEntry?.seasonNumber || 1);
   if (!Number.isFinite(parsed)) {
@@ -2934,6 +2952,17 @@ function navigateToSeriesEpisode(nextIndex) {
   if (!targetEpisode) {
     return;
   }
+  if (!isSeriesEpisodePlayable(targetEpisode)) {
+    showResolver("This episode is unavailable until its MP4 source is added.", {
+      showStatus: true,
+      isError: true,
+    });
+    window.setTimeout(() => {
+      hideResolver();
+    }, 2200);
+    closeEpisodesPopover();
+    return;
+  }
 
   persistResumeTime(true);
 
@@ -2999,14 +3028,21 @@ function renderSeriesEpisodePreview() {
   }
 
   seriesEpisodes.forEach((episodeEntry, index) => {
+    const isPlayable = isSeriesEpisodePlayable(episodeEntry);
     const item = document.createElement("button");
     item.type = "button";
     item.className = "episode-preview-item";
+    if (!isPlayable) {
+      item.classList.add("is-unavailable");
+      item.disabled = true;
+    }
     item.dataset.episodeIndex = String(index);
     item.setAttribute("role", "listitem");
     item.setAttribute(
       "aria-label",
-      `Episode ${index + 1}: ${episodeEntry.title}`,
+      isPlayable
+        ? `Episode ${index + 1}: ${episodeEntry.title}`
+        : `Episode ${index + 1}: ${episodeEntry.title} (Unavailable)`,
     );
     if (index === seriesEpisodeIndex) {
       item.classList.add("is-active");
@@ -3022,7 +3058,9 @@ function renderSeriesEpisodePreview() {
 
     const heading = document.createElement("p");
     heading.className = "episode-preview-title";
-    heading.textContent = episodeEntry.title;
+    heading.textContent = isPlayable
+      ? episodeEntry.title
+      : `${episodeEntry.title} (Unavailable)`;
     main.appendChild(heading);
 
     const thumb = document.createElement("img");
@@ -3034,7 +3072,9 @@ function renderSeriesEpisodePreview() {
 
     const description = document.createElement("p");
     description.className = "episode-preview-desc";
-    description.textContent = String(episodeEntry.description || "");
+    description.textContent = isPlayable
+      ? String(episodeEntry.description || "")
+      : "Unavailable until MP4 source is added.";
 
     item.append(number, main, description);
     episodesList.appendChild(item);
@@ -3078,13 +3118,16 @@ function closeEpisodesPopover(withDelay = false) {
 
 function syncSeriesControls() {
   const shouldShowControls = hasSeriesEpisodeControls;
-  const hasNextEpisode =
+  const nextEpisodeEntry =
     shouldShowControls &&
     seriesEpisodeIndex >= 0 &&
-    seriesEpisodeIndex < seriesEpisodes.length - 1;
-  const nextTitle = hasNextEpisode
-    ? seriesEpisodes[seriesEpisodeIndex + 1]?.title
-    : "";
+    seriesEpisodeIndex < seriesEpisodes.length - 1
+      ? seriesEpisodes[seriesEpisodeIndex + 1]
+      : null;
+  const hasNextEpisode = Boolean(
+    nextEpisodeEntry && isSeriesEpisodePlayable(nextEpisodeEntry),
+  );
+  const nextTitle = String(nextEpisodeEntry?.title || "").trim();
 
   if (nextEpisode) {
     nextEpisode.hidden = !shouldShowControls;
@@ -3093,7 +3136,9 @@ function syncSeriesControls() {
       "aria-label",
       hasNextEpisode
         ? `Next episode (${nextTitle})`
-        : "Next episode unavailable",
+        : nextEpisodeEntry
+          ? `Next episode (${nextTitle}) unavailable`
+          : "Next episode unavailable",
     );
   }
 
@@ -5077,6 +5122,21 @@ async function initPlaybackSource() {
     }
     setVideoSource(nextSource);
     await tryPlay();
+    return;
+  }
+
+  if (
+    isSeriesPlayback &&
+    seriesRequiresLocalEpisodeSources() &&
+    !hasExplicitSource
+  ) {
+    tmdbExpectedDurationSeconds = 0;
+    video.removeAttribute("src");
+    video.load();
+    showResolver("This episode is unavailable until its MP4 source is added.", {
+      showStatus: true,
+      isError: true,
+    });
     return;
   }
 

@@ -600,6 +600,19 @@ body {
     background: rgba(255, 255, 255, 0.1);
 }
 
+.episode-preview-item.is-unavailable {
+    opacity: 0.56;
+    cursor: not-allowed;
+    background: rgba(255, 255, 255, 0.01);
+}
+
+.episode-preview-item.is-unavailable:hover,
+.episode-preview-item.is-unavailable:focus-visible {
+    border-color: rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.01);
+    transform: none;
+}
+
 .episode-preview-number {
     margin: 0;
     font-size: 2rem;

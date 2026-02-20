@@ -45,17 +45,34 @@ const PROFILE_AVATAR_IMAGE_PREF_KEY = "netflix-profile-avatar-image";
 const RESUME_STORAGE_PREFIX = "netflix-resume:";
 const CONTINUE_WATCHING_META_KEY = "netflix-continue-watching-meta";
 const JEFFREY_EPSTEIN_SERIES_ID = "jeffrey-epstein-filthy-rich";
+const JEFFREY_EPSTEIN_EPISODE_1_SOURCE =
+  "assets/videos/Jeffrey.Epstein.Filthy.Rich.S01E01.2160p.NF.WEB-DL.DDP5.1.SDR.HEVC-DiSGUSTiNG.mp4";
 const BREAKING_BAD_SERIES_ID = "breaking-bad";
 const LOCAL_TATE_LEGACY_SOURCE = "assets/videos/tate-full.mp4";
 const LOCAL_TATE_SOURCE = "assets/videos/local/tate-part-1/video.mp4";
 const LOCAL_TATE_THUMBNAIL = "assets/videos/local/tate-part-1/thumbnail.jpg";
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de"]);
-const supportedStreamQualityPreferences = new Set(["auto", "2160p", "1080p", "720p"]);
-const supportedAvatarStyles = new Set(["blue", "crimson", "emerald", "violet", "amber"]);
-const avatarStyleClassNames = Array.from(supportedAvatarStyles).map((style) => `avatar-style-${style}`);
+const supportedStreamQualityPreferences = new Set([
+  "auto",
+  "2160p",
+  "1080p",
+  "720p",
+]);
+const supportedAvatarStyles = new Set([
+  "blue",
+  "crimson",
+  "emerald",
+  "violet",
+  "amber",
+]);
+const avatarStyleClassNames = Array.from(supportedAvatarStyles).map(
+  (style) => `avatar-style-${style}`,
+);
 
 function normalizeAvatarStyle(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (supportedAvatarStyles.has(normalized)) {
     return normalized;
   }
@@ -63,7 +80,9 @@ function normalizeAvatarStyle(value) {
 }
 
 function normalizeAvatarMode(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   return normalized === "custom" ? "custom" : "preset";
 }
 
@@ -80,7 +99,9 @@ function sanitizeAvatarImageData(value) {
 
 function getStoredAvatarStylePreference() {
   try {
-    return normalizeAvatarStyle(localStorage.getItem(PROFILE_AVATAR_STYLE_PREF_KEY));
+    return normalizeAvatarStyle(
+      localStorage.getItem(PROFILE_AVATAR_STYLE_PREF_KEY),
+    );
   } catch {
     return "blue";
   }
@@ -88,7 +109,9 @@ function getStoredAvatarStylePreference() {
 
 function getStoredAvatarModePreference() {
   try {
-    return normalizeAvatarMode(localStorage.getItem(PROFILE_AVATAR_MODE_PREF_KEY));
+    return normalizeAvatarMode(
+      localStorage.getItem(PROFILE_AVATAR_MODE_PREF_KEY),
+    );
   } catch {
     return "preset";
   }
@@ -96,7 +119,9 @@ function getStoredAvatarModePreference() {
 
 function getStoredAvatarImagePreference() {
   try {
-    return sanitizeAvatarImageData(localStorage.getItem(PROFILE_AVATAR_IMAGE_PREF_KEY));
+    return sanitizeAvatarImageData(
+      localStorage.getItem(PROFILE_AVATAR_IMAGE_PREF_KEY),
+    );
   } catch {
     return "";
   }
@@ -139,7 +164,11 @@ function getStoredAudioLangForTmdbMovie(tmdbId) {
   }
 
   try {
-    const raw = String(localStorage.getItem(`${AUDIO_LANG_PREF_KEY_PREFIX}${normalizedTmdbId}`) || "")
+    const raw = String(
+      localStorage.getItem(
+        `${AUDIO_LANG_PREF_KEY_PREFIX}${normalizedTmdbId}`,
+      ) || "",
+    )
       .trim()
       .toLowerCase();
     if (supportedAudioLangs.has(raw)) {
@@ -153,7 +182,9 @@ function getStoredAudioLangForTmdbMovie(tmdbId) {
 }
 
 function normalizeStreamQualityPreference(value) {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (!normalized) return "auto";
   if (normalized === "4k" || normalized === "uhd") return "2160p";
   if (normalized === "2160") return "2160p";
@@ -205,7 +236,9 @@ function formatResumeTimestamp(totalSeconds) {
 
 function readContinueWatchingMetaMap() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(CONTINUE_WATCHING_META_KEY) || "{}");
+    const parsed = JSON.parse(
+      localStorage.getItem(CONTINUE_WATCHING_META_KEY) || "{}",
+    );
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -214,7 +247,10 @@ function readContinueWatchingMetaMap() {
 
 function isLocalTateSource(sourceIdentity) {
   const normalizedSource = String(sourceIdentity || "").trim();
-  return normalizedSource === LOCAL_TATE_LEGACY_SOURCE || normalizedSource === LOCAL_TATE_SOURCE;
+  return (
+    normalizedSource === LOCAL_TATE_LEGACY_SOURCE ||
+    normalizedSource === LOCAL_TATE_SOURCE
+  );
 }
 
 function extractSeriesIdFromSourceIdentity(sourceIdentity) {
@@ -224,7 +260,11 @@ function extractSeriesIdFromSourceIdentity(sourceIdentity) {
   }
 
   const seriesMatch = /^series:([^:]+):episode:(\d+)$/i.exec(normalizedSource);
-  return seriesMatch ? String(seriesMatch[1] || "").trim().toLowerCase() : "";
+  return seriesMatch
+    ? String(seriesMatch[1] || "")
+        .trim()
+        .toLowerCase()
+    : "";
 }
 
 function parseTmdbSourceIdentity(sourceIdentity) {
@@ -233,10 +273,14 @@ function parseTmdbSourceIdentity(sourceIdentity) {
     return { tmdbId: "", mediaType: "" };
   }
 
-  const typedMatch = /^tmdb:(movie|tv):(\d+)(?::s(\d+):e(\d+))?$/i.exec(normalizedSource);
+  const typedMatch = /^tmdb:(movie|tv):(\d+)(?::s(\d+):e(\d+))?$/i.exec(
+    normalizedSource,
+  );
   if (typedMatch) {
     return {
-      mediaType: String(typedMatch[1] || "").trim().toLowerCase(),
+      mediaType: String(typedMatch[1] || "")
+        .trim()
+        .toLowerCase(),
       tmdbId: String(typedMatch[2] || "").trim(),
     };
   }
@@ -252,7 +296,11 @@ function parseTmdbSourceIdentity(sourceIdentity) {
   return { tmdbId: "", mediaType: "" };
 }
 
-function removeResumeEntriesForSource(sourceIdentity, seriesId = "", parsedTmdbSource = { tmdbId: "", mediaType: "" }) {
+function removeResumeEntriesForSource(
+  sourceIdentity,
+  seriesId = "",
+  parsedTmdbSource = { tmdbId: "", mediaType: "" },
+) {
   const normalizedSource = String(sourceIdentity || "").trim();
   if (!normalizedSource) {
     return;
@@ -261,7 +309,9 @@ function removeResumeEntriesForSource(sourceIdentity, seriesId = "", parsedTmdbS
   const keysToDelete = new Set();
   keysToDelete.add(`${RESUME_STORAGE_PREFIX}${normalizedSource}`);
 
-  const normalizedSeriesId = String(seriesId || "").trim().toLowerCase();
+  const normalizedSeriesId = String(seriesId || "")
+    .trim()
+    .toLowerCase();
   if (normalizedSeriesId) {
     const seriesResumePrefix = `${RESUME_STORAGE_PREFIX}series:${normalizedSeriesId}:episode:`;
     for (let index = 0; index < localStorage.length; index += 1) {
@@ -273,13 +323,18 @@ function removeResumeEntriesForSource(sourceIdentity, seriesId = "", parsedTmdbS
   }
 
   const tmdbId = String(parsedTmdbSource?.tmdbId || "").trim();
-  const mediaType = String(parsedTmdbSource?.mediaType || "").trim().toLowerCase();
+  const mediaType = String(parsedTmdbSource?.mediaType || "")
+    .trim()
+    .toLowerCase();
   if (tmdbId) {
     if (mediaType === "tv") {
       const tvResumePrefix = `${RESUME_STORAGE_PREFIX}tmdb:tv:${tmdbId}`;
       for (let index = 0; index < localStorage.length; index += 1) {
         const key = localStorage.key(index);
-        if (key && (key === tvResumePrefix || key.startsWith(`${tvResumePrefix}:`))) {
+        if (
+          key &&
+          (key === tvResumePrefix || key.startsWith(`${tvResumePrefix}:`))
+        ) {
           keysToDelete.add(key);
         }
       }
@@ -295,13 +350,20 @@ function removeResumeEntriesForSource(sourceIdentity, seriesId = "", parsedTmdbS
   });
 }
 
-function removeContinueMetaEntriesForSource(metaMap, sourceIdentity, seriesId = "", parsedTmdbSource = { tmdbId: "", mediaType: "" }) {
+function removeContinueMetaEntriesForSource(
+  metaMap,
+  sourceIdentity,
+  seriesId = "",
+  parsedTmdbSource = { tmdbId: "", mediaType: "" },
+) {
   if (!metaMap || typeof metaMap !== "object") {
     return;
   }
 
   const normalizedSource = String(sourceIdentity || "").trim();
-  const normalizedSeriesId = String(seriesId || "").trim().toLowerCase();
+  const normalizedSeriesId = String(seriesId || "")
+    .trim()
+    .toLowerCase();
   if (normalizedSeriesId) {
     Object.keys(metaMap).forEach((key) => {
       if (extractSeriesIdFromSourceIdentity(key) === normalizedSeriesId) {
@@ -312,14 +374,18 @@ function removeContinueMetaEntriesForSource(metaMap, sourceIdentity, seriesId = 
   }
 
   const tmdbId = String(parsedTmdbSource?.tmdbId || "").trim();
-  const mediaType = String(parsedTmdbSource?.mediaType || "").trim().toLowerCase();
+  const mediaType = String(parsedTmdbSource?.mediaType || "")
+    .trim()
+    .toLowerCase();
   if (tmdbId) {
     Object.keys(metaMap).forEach((key) => {
       const parsed = parseTmdbSourceIdentity(key);
       if (String(parsed.tmdbId || "").trim() !== tmdbId) {
         return;
       }
-      const parsedMediaType = String(parsed.mediaType || "").trim().toLowerCase();
+      const parsedMediaType = String(parsed.mediaType || "")
+        .trim()
+        .toLowerCase();
       if (mediaType && parsedMediaType && parsedMediaType !== mediaType) {
         return;
       }
@@ -332,18 +398,26 @@ function removeContinueMetaEntriesForSource(metaMap, sourceIdentity, seriesId = 
 
 function removeLocalTitleTrackPreferences(tmdbId, mediaType = "movie") {
   const normalizedTmdbId = String(tmdbId || "").trim();
-  const normalizedMediaType = String(mediaType || "").trim().toLowerCase();
+  const normalizedMediaType = String(mediaType || "")
+    .trim()
+    .toLowerCase();
   if (normalizedMediaType === "tv" || !/^\d+$/.test(normalizedTmdbId)) {
     return;
   }
   localStorage.removeItem(`${AUDIO_LANG_PREF_KEY_PREFIX}${normalizedTmdbId}`);
-  localStorage.removeItem(`${SUBTITLE_LANG_PREF_KEY_PREFIX}${normalizedTmdbId}`);
-  localStorage.removeItem(`${SUBTITLE_STREAM_PREF_KEY_PREFIX}${normalizedTmdbId}`);
+  localStorage.removeItem(
+    `${SUBTITLE_LANG_PREF_KEY_PREFIX}${normalizedTmdbId}`,
+  );
+  localStorage.removeItem(
+    `${SUBTITLE_STREAM_PREF_KEY_PREFIX}${normalizedTmdbId}`,
+  );
 }
 
 async function clearServerTitleMemory(tmdbId, mediaType = "movie") {
   const normalizedTmdbId = String(tmdbId || "").trim();
-  const normalizedMediaType = String(mediaType || "").trim().toLowerCase();
+  const normalizedMediaType = String(mediaType || "")
+    .trim()
+    .toLowerCase();
   if (normalizedMediaType === "tv" || !/^\d+$/.test(normalizedTmdbId)) {
     return;
   }
@@ -358,14 +432,22 @@ async function clearServerTitleMemory(tmdbId, mediaType = "movie") {
   }
 }
 
-function inferContinueMediaType(sourceIdentity, explicitMediaType = "", explicitSeriesId = "") {
-  const normalizedExplicitType = String(explicitMediaType || "").trim().toLowerCase();
+function inferContinueMediaType(
+  sourceIdentity,
+  explicitMediaType = "",
+  explicitSeriesId = "",
+) {
+  const normalizedExplicitType = String(explicitMediaType || "")
+    .trim()
+    .toLowerCase();
   if (normalizedExplicitType === "movie" || normalizedExplicitType === "tv") {
     return normalizedExplicitType;
   }
 
-  const seriesId = String(explicitSeriesId || "").trim().toLowerCase()
-    || extractSeriesIdFromSourceIdentity(sourceIdentity);
+  const seriesId =
+    String(explicitSeriesId || "")
+      .trim()
+      .toLowerCase() || extractSeriesIdFromSourceIdentity(sourceIdentity);
   if (seriesId) {
     return "tv";
   }
@@ -380,7 +462,9 @@ function inferContinueMediaType(sourceIdentity, explicitMediaType = "", explicit
 
 function normalizeLocalContinueEntry(entry) {
   const safeEntry = { ...entry };
-  safeEntry.mediaType = String(safeEntry.mediaType || "").trim().toLowerCase();
+  safeEntry.mediaType = String(safeEntry.mediaType || "")
+    .trim()
+    .toLowerCase();
   if (safeEntry.mediaType !== "movie" && safeEntry.mediaType !== "tv") {
     safeEntry.mediaType = "";
   }
@@ -407,30 +491,49 @@ function normalizeLocalContinueEntry(entry) {
 function removeContinueWatchingEntry(sourceIdentity) {
   const normalizedSource = String(sourceIdentity || "").trim();
   if (!normalizedSource) return;
-  const normalizedSeriesId = extractSeriesIdFromSourceIdentity(normalizedSource);
+  const normalizedSeriesId =
+    extractSeriesIdFromSourceIdentity(normalizedSource);
   const parsedTmdbSource = parseTmdbSourceIdentity(normalizedSource);
 
   try {
-    removeResumeEntriesForSource(normalizedSource, normalizedSeriesId, parsedTmdbSource);
+    removeResumeEntriesForSource(
+      normalizedSource,
+      normalizedSeriesId,
+      parsedTmdbSource,
+    );
 
     const metaMap = readContinueWatchingMetaMap();
     if (metaMap && typeof metaMap === "object") {
-      removeContinueMetaEntriesForSource(metaMap, normalizedSource, normalizedSeriesId, parsedTmdbSource);
+      removeContinueMetaEntriesForSource(
+        metaMap,
+        normalizedSource,
+        normalizedSeriesId,
+        parsedTmdbSource,
+      );
 
       const hasEntries = Object.keys(metaMap).length > 0;
       if (hasEntries) {
-        localStorage.setItem(CONTINUE_WATCHING_META_KEY, JSON.stringify(metaMap));
+        localStorage.setItem(
+          CONTINUE_WATCHING_META_KEY,
+          JSON.stringify(metaMap),
+        );
       } else {
         localStorage.removeItem(CONTINUE_WATCHING_META_KEY);
       }
     }
 
-    removeLocalTitleTrackPreferences(parsedTmdbSource.tmdbId, parsedTmdbSource.mediaType);
+    removeLocalTitleTrackPreferences(
+      parsedTmdbSource.tmdbId,
+      parsedTmdbSource.mediaType,
+    );
   } catch {
     // Ignore storage access issues.
   }
 
-  void clearServerTitleMemory(parsedTmdbSource.tmdbId, parsedTmdbSource.mediaType);
+  void clearServerTitleMemory(
+    parsedTmdbSource.tmdbId,
+    parsedTmdbSource.mediaType,
+  );
 }
 
 function getContinueWatchingEntries() {
@@ -440,8 +543,10 @@ function getContinueWatchingEntries() {
     if (isLocalTateSource(sourceIdentity)) {
       return "local:tate-part-1";
     }
-    const normalizedSeriesId = String(explicitSeriesId || "").trim().toLowerCase()
-      || extractSeriesIdFromSourceIdentity(sourceIdentity);
+    const normalizedSeriesId =
+      String(explicitSeriesId || "")
+        .trim()
+        .toLowerCase() || extractSeriesIdFromSourceIdentity(sourceIdentity);
     if (normalizedSeriesId) {
       return `series:${normalizedSeriesId}`;
     }
@@ -450,7 +555,8 @@ function getContinueWatchingEntries() {
 
   Object.entries(metaMap).forEach(([sourceIdentity, value]) => {
     const normalizedSource = String(sourceIdentity || "").trim();
-    if (!normalizedSource || typeof value !== "object" || value === null) return;
+    if (!normalizedSource || typeof value !== "object" || value === null)
+      return;
 
     const resumeKey = `${RESUME_STORAGE_PREFIX}${normalizedSource}`;
     const resumeSeconds = Number(localStorage.getItem(resumeKey));
@@ -465,7 +571,9 @@ function getContinueWatchingEntries() {
       title: String(value.title || "").trim(),
       episode: String(value.episode || "").trim(),
       src: String(value.src || "").trim(),
-      tmdbId: String(value.tmdbId || "").trim() || parseTmdbSourceIdentity(normalizedSource).tmdbId,
+      tmdbId:
+        String(value.tmdbId || "").trim() ||
+        parseTmdbSourceIdentity(normalizedSource).tmdbId,
       mediaType: inferContinueMediaType(
         normalizedSource,
         String(value.mediaType || "").trim(),
@@ -478,9 +586,16 @@ function getContinueWatchingEntries() {
       year: String(value.year || "").trim(),
       thumb: String(value.thumb || "").trim(),
     });
-    const dedupeKey = dedupeKeyForSource(normalizedSource, normalizedEntry.seriesId);
+    const dedupeKey = dedupeKeyForSource(
+      normalizedSource,
+      normalizedEntry.seriesId,
+    );
     const existingEntry = entriesBySource.get(dedupeKey);
-    if (!existingEntry || Number(normalizedEntry.updatedAt || 0) >= Number(existingEntry.updatedAt || 0)) {
+    if (
+      !existingEntry ||
+      Number(normalizedEntry.updatedAt || 0) >=
+        Number(existingEntry.updatedAt || 0)
+    ) {
       entriesBySource.set(dedupeKey, normalizedEntry);
     }
   });
@@ -505,7 +620,9 @@ function getContinueWatchingEntries() {
     const parsedTmdbSource = parseTmdbSourceIdentity(sourceIdentity);
     const tmdbId = String(parsedTmdbSource.tmdbId || "").trim();
     const seriesMatch = /^series:([^:]+):episode:(\d+)$/i.exec(sourceIdentity);
-    const inferredSeriesId = seriesMatch ? String(seriesMatch[1] || "").trim() : "";
+    const inferredSeriesId = seriesMatch
+      ? String(seriesMatch[1] || "").trim()
+      : "";
     const inferredEpisodeIndex = seriesMatch ? Number(seriesMatch[2]) : -1;
     const normalizedEntry = normalizeLocalContinueEntry({
       sourceIdentity,
@@ -513,17 +630,27 @@ function getContinueWatchingEntries() {
       updatedAt: 0,
       title: tmdbId ? "Movie" : "Continue Watching",
       episode: "",
-      src: (tmdbId || inferredSeriesId) ? "" : sourceIdentity,
+      src: tmdbId || inferredSeriesId ? "" : sourceIdentity,
       tmdbId,
-      mediaType: inferContinueMediaType(sourceIdentity, parsedTmdbSource.mediaType, inferredSeriesId),
+      mediaType: inferContinueMediaType(
+        sourceIdentity,
+        parsedTmdbSource.mediaType,
+        inferredSeriesId,
+      ),
       seriesId: inferredSeriesId,
-      episodeIndex: Number.isFinite(inferredEpisodeIndex) ? Math.max(0, Math.floor(inferredEpisodeIndex)) : -1,
+      episodeIndex: Number.isFinite(inferredEpisodeIndex)
+        ? Math.max(0, Math.floor(inferredEpisodeIndex))
+        : -1,
       year: "",
       thumb: "",
     });
     const dedupeKey = dedupeKeyForSource(sourceIdentity, inferredSeriesId);
     const existingEntry = entriesBySource.get(dedupeKey);
-    if (!existingEntry || Number(normalizedEntry.updatedAt || 0) >= Number(existingEntry.updatedAt || 0)) {
+    if (
+      !existingEntry ||
+      Number(normalizedEntry.updatedAt || 0) >=
+        Number(existingEntry.updatedAt || 0)
+    ) {
       entriesBySource.set(dedupeKey, normalizedEntry);
     }
   }
@@ -539,39 +666,76 @@ function getContinueWatchingEntries() {
 }
 
 function buildContinueWatchingCard(entry, tmdbDetails = null) {
-  const normalizedMediaType = inferContinueMediaType(entry.sourceIdentity, entry.mediaType, entry.seriesId);
+  const normalizedMediaType = inferContinueMediaType(
+    entry.sourceIdentity,
+    entry.mediaType,
+    entry.seriesId,
+  );
   const isSeriesEntry = normalizedMediaType === "tv";
-  const isPodcastEntry = !tmdbDetails && isLocalTateSource(entry.sourceIdentity);
-  const title = (isSeriesEntry ? (tmdbDetails?.name || tmdbDetails?.title) : (tmdbDetails?.title || tmdbDetails?.name))
-    || entry.title
-    || (isSeriesEntry ? "Series" : "Movie");
+  const isPodcastEntry =
+    !tmdbDetails && isLocalTateSource(entry.sourceIdentity);
+  const title =
+    (isSeriesEntry
+      ? tmdbDetails?.name || tmdbDetails?.title
+      : tmdbDetails?.title || tmdbDetails?.name) ||
+    entry.title ||
+    (isSeriesEntry ? "Series" : "Movie");
   const releaseDate = isSeriesEntry
     ? String(tmdbDetails?.first_air_date || tmdbDetails?.release_date || "")
     : String(tmdbDetails?.release_date || "");
-  const year = releaseDate ? releaseDate.slice(0, 4) : (entry.year || "");
-  const posterPath = tmdbDetails?.poster_path || tmdbDetails?.backdrop_path || "";
-  const backdropPath = tmdbDetails?.backdrop_path || tmdbDetails?.poster_path || "";
-  const posterUrl = posterPath ? `${TMDB_IMAGE_BASE}/w500${posterPath}` : (entry.thumb || "assets/images/thumbnail.jpg");
-  const heroUrl = backdropPath ? `${TMDB_IMAGE_BASE}/original${backdropPath}` : posterUrl;
-  const runtimeMinutes = Number(isSeriesEntry ? tmdbDetails?.episode_run_time?.[0] : tmdbDetails?.runtime) || 0;
+  const year = releaseDate ? releaseDate.slice(0, 4) : entry.year || "";
+  const posterPath =
+    tmdbDetails?.poster_path || tmdbDetails?.backdrop_path || "";
+  const backdropPath =
+    tmdbDetails?.backdrop_path || tmdbDetails?.poster_path || "";
+  const posterUrl = posterPath
+    ? `${TMDB_IMAGE_BASE}/w500${posterPath}`
+    : entry.thumb || "assets/images/thumbnail.jpg";
+  const heroUrl = backdropPath
+    ? `${TMDB_IMAGE_BASE}/original${backdropPath}`
+    : posterUrl;
+  const runtimeMinutes =
+    Number(
+      isSeriesEntry ? tmdbDetails?.episode_run_time?.[0] : tmdbDetails?.runtime,
+    ) || 0;
   const estimatedDurationSeconds = runtimeMinutes > 0 ? runtimeMinutes * 60 : 0;
-  const progressPercent = estimatedDurationSeconds > 0
-    ? Math.max(4, Math.min(96, Math.round((entry.resumeSeconds / estimatedDurationSeconds) * 100)))
-    : 24;
-  const genreNames = (tmdbDetails?.genres || []).map((genre) => String(genre?.name || "").trim()).filter(Boolean).slice(0, 3);
+  const progressPercent =
+    estimatedDurationSeconds > 0
+      ? Math.max(
+          4,
+          Math.min(
+            96,
+            Math.round((entry.resumeSeconds / estimatedDurationSeconds) * 100),
+          ),
+        )
+      : 24;
+  const genreNames = (tmdbDetails?.genres || [])
+    .map((genre) => String(genre?.name || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
   const tagLine = genreNames.length
     ? genreNames.map(escapeHtml).join(" <span>&bull;</span> ")
-    : (isPodcastEntry
+    : isPodcastEntry
       ? "Interview <span>&bull;</span> Longform <span>&bull;</span> Talk"
-      : "Continue <span>&bull;</span> Resume");
+      : "Continue <span>&bull;</span> Resume";
   const safeTitle = escapeHtml(title);
-  const safeDescription = tmdbDetails?.overview || (isPodcastEntry
-    ? "Resume this podcast episode where you left off."
-    : "Resume where you left off.");
-  const maturity = isPodcastEntry ? "18" : (tmdbDetails?.adult ? "18" : "13+");
+  const safeDescription =
+    tmdbDetails?.overview ||
+    (isPodcastEntry
+      ? "Resume this podcast episode where you left off."
+      : "Resume where you left off.");
+  const maturity = isPodcastEntry ? "18" : tmdbDetails?.adult ? "18" : "13+";
   const qualityLabel = isPodcastEntry ? "VIDEO" : "HD";
-  const contentTypeLabel = isPodcastEntry ? "Podcast" : (isSeriesEntry ? "Series" : "Movie");
-  const cast = (tmdbDetails?.credits?.cast || []).slice(0, 4).map((person) => person?.name).filter(Boolean).join(", ");
+  const contentTypeLabel = isPodcastEntry
+    ? "Podcast"
+    : isSeriesEntry
+      ? "Series"
+      : "Movie";
+  const cast = (tmdbDetails?.credits?.cast || [])
+    .slice(0, 4)
+    .map((person) => person?.name)
+    .filter(Boolean)
+    .join(", ");
 
   const card = document.createElement("article");
   card.className = "card";
@@ -582,14 +746,27 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
   card.dataset.src = entry.src || "";
   card.dataset.thumb = heroUrl;
   card.dataset.year = year || (isSeriesEntry ? "Series" : "Movie");
-  card.dataset.runtime = runtimeMinutes > 0 ? formatRuntime(runtimeMinutes) : (isPodcastEntry ? "Episode" : (isSeriesEntry ? "Series" : "Movie"));
+  card.dataset.runtime =
+    runtimeMinutes > 0
+      ? formatRuntime(runtimeMinutes)
+      : isPodcastEntry
+        ? "Episode"
+        : isSeriesEntry
+          ? "Series"
+          : "Movie";
   card.dataset.maturity = maturity;
   card.dataset.quality = qualityLabel;
   card.dataset.audio = isPodcastEntry ? "Podcast Audio" : "Stereo";
   card.dataset.description = safeDescription;
   card.dataset.cast = cast || "Cast details unavailable.";
-  card.dataset.genres = genreNames.length ? genreNames.join(", ") : (isPodcastEntry ? "Podcast, Interview" : "Movie");
-  card.dataset.vibe = isPodcastEntry ? "Interview, Longform, Conversational" : "Continue watching";
+  card.dataset.genres = genreNames.length
+    ? genreNames.join(", ")
+    : isPodcastEntry
+      ? "Podcast, Interview"
+      : "Movie";
+  card.dataset.vibe = isPodcastEntry
+    ? "Interview, Longform, Conversational"
+    : "Continue watching";
   card.dataset.tmdbId = entry.tmdbId || "";
   card.dataset.mediaType = normalizedMediaType || entry.mediaType || "";
   card.dataset.seriesId = entry.seriesId || "";
@@ -658,8 +835,12 @@ function buildCardFromTmdb(item, genreMap, imageBase = TMDB_IMAGE_BASE) {
   const year = releaseDate ? releaseDate.slice(0, 4) : "2024";
   const posterPath = item.poster_path || item.backdrop_path;
   const backdropPath = item.backdrop_path || item.poster_path;
-  const posterUrl = posterPath ? `${imageBase}/w500${posterPath}` : "assets/images/thumbnail.jpg";
-  const heroUrl = backdropPath ? `${imageBase}/original${backdropPath}` : posterUrl;
+  const posterUrl = posterPath
+    ? `${imageBase}/w500${posterPath}`
+    : "assets/images/thumbnail.jpg";
+  const heroUrl = backdropPath
+    ? `${imageBase}/original${backdropPath}`
+    : posterUrl;
   const maturity = item.adult ? "18" : "13+";
   const genreNames = (item.genre_ids || [])
     .map((id) => genreMap.get(id))
@@ -684,7 +865,9 @@ function buildCardFromTmdb(item, genreMap, imageBase = TMDB_IMAGE_BASE) {
   card.dataset.audio = "Stereo";
   card.dataset.description = item.overview || "No description available.";
   card.dataset.cast = "Loading cast...";
-  card.dataset.genres = genreNames.length ? genreNames.join(", ") : "Popular title";
+  card.dataset.genres = genreNames.length
+    ? genreNames.join(", ")
+    : "Popular title";
   card.dataset.vibe = "Trending, Popular, High-energy";
   card.dataset.tmdbId = String(item.id);
   card.dataset.mediaType = "movie";
@@ -731,19 +914,26 @@ function buildCardFromTmdb(item, genreMap, imageBase = TMDB_IMAGE_BASE) {
 }
 
 function buildCardFromTmdbSeries(item, imageBase = TMDB_IMAGE_BASE) {
-  const title = String(item?.name || item?.title || "Untitled").trim() || "Untitled";
-  const firstAirDate = String(item?.first_air_date || item?.release_date || "").trim();
+  const title =
+    String(item?.name || item?.title || "Untitled").trim() || "Untitled";
+  const firstAirDate = String(
+    item?.first_air_date || item?.release_date || "",
+  ).trim();
   const year = firstAirDate ? firstAirDate.slice(0, 4) : "2008";
   const posterPath = item?.poster_path || item?.backdrop_path;
   const backdropPath = item?.backdrop_path || item?.poster_path;
-  const posterUrl = posterPath ? `${imageBase}/w500${posterPath}` : "assets/images/thumbnail.jpg";
-  const heroUrl = backdropPath ? `${imageBase}/original${backdropPath}` : posterUrl;
+  const posterUrl = posterPath
+    ? `${imageBase}/w500${posterPath}`
+    : "assets/images/thumbnail.jpg";
+  const heroUrl = backdropPath
+    ? `${imageBase}/original${backdropPath}`
+    : posterUrl;
   const maturity = item?.adult ? "18" : "16+";
   const genreNames = Array.isArray(item?.genres)
     ? item.genres
-      .map((genre) => String(genre?.name || "").trim())
-      .filter(Boolean)
-      .slice(0, 3)
+        .map((genre) => String(genre?.name || "").trim())
+        .filter(Boolean)
+        .slice(0, 3)
     : [];
   const tagLine = genreNames.length
     ? genreNames.map(escapeHtml).join(" <span>&bull;</span> ")
@@ -762,9 +952,13 @@ function buildCardFromTmdbSeries(item, imageBase = TMDB_IMAGE_BASE) {
   card.dataset.maturity = maturity;
   card.dataset.quality = "HD";
   card.dataset.audio = "Stereo";
-  card.dataset.description = item?.overview || "A high school chemistry teacher enters the meth trade and spirals into a dangerous double life.";
+  card.dataset.description =
+    item?.overview ||
+    "A high school chemistry teacher enters the meth trade and spirals into a dangerous double life.";
   card.dataset.cast = "Loading cast...";
-  card.dataset.genres = genreNames.length ? genreNames.join(", ") : "Crime, Drama";
+  card.dataset.genres = genreNames.length
+    ? genreNames.join(", ")
+    : "Crime, Drama";
   card.dataset.vibe = "Dark, Tense, Character-driven";
   card.dataset.tmdbId = String(item?.id || "1396");
   card.dataset.mediaType = "tv";
@@ -816,7 +1010,13 @@ async function loadPopularTitles() {
   if (!cardsContainer) return;
 
   try {
-    const [payload, darkKnightDetails, inceptionDetails, interstellarDetails, breakingBadDetails] = await Promise.all([
+    const [
+      payload,
+      darkKnightDetails,
+      inceptionDetails,
+      interstellarDetails,
+      breakingBadDetails,
+    ] = await Promise.all([
       apiFetch("/api/tmdb/popular-movies", { page: "1" }),
       apiFetch("/api/tmdb/details", {
         tmdbId: "155",
@@ -845,9 +1045,10 @@ async function loadPopularTitles() {
       if (!movie?.id) return null;
       return {
         ...movie,
-        genre_ids: Array.isArray(movie.genre_ids) && movie.genre_ids.length
-          ? movie.genre_ids
-          : (movie.genres || []).map((genre) => genre.id).filter(Boolean),
+        genre_ids:
+          Array.isArray(movie.genre_ids) && movie.genre_ids.length
+            ? movie.genre_ids
+            : (movie.genres || []).map((genre) => genre.id).filter(Boolean),
       };
     };
 
@@ -856,19 +1057,21 @@ async function loadPopularTitles() {
       normalizeMovie(inceptionDetails),
       normalizeMovie(interstellarDetails),
     ].filter(Boolean);
-    const breakingBadSeries = breakingBadDetails && typeof breakingBadDetails === "object"
-      ? breakingBadDetails
-      : {
-        id: 1396,
-        name: "Breaking Bad",
-        first_air_date: "2008-01-20",
-        overview: "A chemistry teacher diagnosed with cancer teams with a former student to build a meth empire.",
-        genres: [
-          { name: "Drama" },
-          { name: "Crime" },
-          { name: "Thriller" },
-        ],
-      };
+    const breakingBadSeries =
+      breakingBadDetails && typeof breakingBadDetails === "object"
+        ? breakingBadDetails
+        : {
+            id: 1396,
+            name: "Breaking Bad",
+            first_air_date: "2008-01-20",
+            overview:
+              "A chemistry teacher diagnosed with cancer teams with a former student to build a meth empire.",
+            genres: [
+              { name: "Drama" },
+              { name: "Crime" },
+              { name: "Thriller" },
+            ],
+          };
 
     const imageBase = payload.imageBase || TMDB_IMAGE_BASE;
 
@@ -908,43 +1111,63 @@ async function loadContinueWatching() {
     return;
   }
 
-  const tmdbDetailKeys = Array.from(new Set(entries
-    .map((entry) => {
-      const tmdbId = String(entry.tmdbId || "").trim();
-      if (!tmdbId) {
-        return "";
-      }
-      const mediaType = inferContinueMediaType(entry.sourceIdentity, entry.mediaType, entry.seriesId) || "movie";
-      return `${mediaType}:${tmdbId}`;
-    })
-    .filter(Boolean)));
+  const tmdbDetailKeys = Array.from(
+    new Set(
+      entries
+        .map((entry) => {
+          const tmdbId = String(entry.tmdbId || "").trim();
+          if (!tmdbId) {
+            return "";
+          }
+          const mediaType =
+            inferContinueMediaType(
+              entry.sourceIdentity,
+              entry.mediaType,
+              entry.seriesId,
+            ) || "movie";
+          return `${mediaType}:${tmdbId}`;
+        })
+        .filter(Boolean),
+    ),
+  );
 
   const detailsMap = new Map();
-  await Promise.all(tmdbDetailKeys.map(async (detailKey) => {
-    try {
-      const separatorIndex = detailKey.indexOf(":");
-      if (separatorIndex <= 0) {
-        return;
+  await Promise.all(
+    tmdbDetailKeys.map(async (detailKey) => {
+      try {
+        const separatorIndex = detailKey.indexOf(":");
+        if (separatorIndex <= 0) {
+          return;
+        }
+        const mediaType = detailKey.slice(0, separatorIndex);
+        const tmdbId = detailKey.slice(separatorIndex + 1);
+        const details = await apiFetch("/api/tmdb/details", {
+          tmdbId,
+          mediaType,
+        });
+        if (details && typeof details === "object") {
+          detailsMap.set(detailKey, details);
+        }
+      } catch {
+        // Best-effort enrichment only.
       }
-      const mediaType = detailKey.slice(0, separatorIndex);
-      const tmdbId = detailKey.slice(separatorIndex + 1);
-      const details = await apiFetch("/api/tmdb/details", {
-        tmdbId,
-        mediaType,
-      });
-      if (details && typeof details === "object") {
-        detailsMap.set(detailKey, details);
-      }
-    } catch {
-      // Best-effort enrichment only.
-    }
-  }));
+    }),
+  );
 
   continueCardsContainer.innerHTML = "";
   entries.forEach((entry, index) => {
-    const normalizedMediaType = inferContinueMediaType(entry.sourceIdentity, entry.mediaType, entry.seriesId) || "movie";
-    const detailsLookupKey = entry.tmdbId ? `${normalizedMediaType}:${String(entry.tmdbId).trim()}` : "";
-    const details = detailsLookupKey ? detailsMap.get(detailsLookupKey) || null : null;
+    const normalizedMediaType =
+      inferContinueMediaType(
+        entry.sourceIdentity,
+        entry.mediaType,
+        entry.seriesId,
+      ) || "movie";
+    const detailsLookupKey = entry.tmdbId
+      ? `${normalizedMediaType}:${String(entry.tmdbId).trim()}`
+      : "";
+    const details = detailsLookupKey
+      ? detailsMap.get(detailsLookupKey) || null
+      : null;
     const card = buildContinueWatchingCard(entry, details);
     if (index >= Math.max(1, entries.length - 2)) {
       card.classList.add("card--align-right");
@@ -962,7 +1185,21 @@ async function loadContinueWatching() {
 function syncMuteUI() {
   const isMuted = introVideo.muted;
   muteToggle.classList.toggle("muted", isMuted);
-  muteToggle.setAttribute("aria-label", isMuted ? "Unmute trailer" : "Mute trailer");
+  muteToggle.setAttribute(
+    "aria-label",
+    isMuted ? "Unmute trailer" : "Mute trailer",
+  );
+}
+
+function getJeffreyEpsteinHeroDestination() {
+  return {
+    title: "Jeffrey Epstein: Filthy Rich",
+    episode: "E1 Hunting Grounds",
+    src: JEFFREY_EPSTEIN_EPISODE_1_SOURCE,
+    mediaType: "tv",
+    seriesId: JEFFREY_EPSTEIN_SERIES_ID,
+    episodeIndex: 0,
+  };
 }
 
 muteToggle.addEventListener("click", async () => {
@@ -977,50 +1214,36 @@ muteToggle.addEventListener("click", async () => {
   }
 });
 
-function syncPlayButtonUI() {
-  if (introVideo.paused) {
-    playButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5v17L20 12 5 3.5Z" /></svg>Play';
-  } else {
-    playButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h4v16H6zm8 0h4v16h-4z" /></svg>Pause';
-  }
-}
-
-playButton.addEventListener("click", async () => {
-  if (introVideo.paused) {
-    try {
-      await introVideo.play();
-    } catch (error) {
-      // Ignore autoplay restrictions if browser blocks playback.
-    }
-    syncPlayButtonUI();
-    return;
-  }
-
-  introVideo.pause();
-  syncPlayButtonUI();
+playButton?.addEventListener("click", () => {
+  openPlayerPage(getJeffreyEpsteinHeroDestination());
 });
-
-document.addEventListener("keydown", (event) => {
-  if (detailsModal && !detailsModal.hidden) return;
-  if (event.key !== " " && event.code !== "Space") return;
-  if (event.target.matches("input, textarea, [contenteditable], button, a")) return;
-
-  event.preventDefault();
-  event.stopPropagation();
-  playButton.click();
-}, { capture: true });
 
 infoButton.addEventListener("click", () => {
-  document.getElementById("continueRow").scrollIntoView({ behavior: "smooth", block: "center" });
+  document
+    .getElementById("continueRow")
+    .scrollIntoView({ behavior: "smooth", block: "center" });
 });
 
-function openPlayerPage({ title, episode, src, tmdbId, mediaType, year, seriesId, episodeIndex }) {
-  const normalizedMediaType = String(mediaType || "").trim().toLowerCase();
+function openPlayerPage({
+  title,
+  episode,
+  src,
+  tmdbId,
+  mediaType,
+  year,
+  seriesId,
+  episodeIndex,
+}) {
+  const normalizedMediaType = String(mediaType || "")
+    .trim()
+    .toLowerCase();
   const normalizedSeriesId = String(seriesId || "").trim();
   const parsedEpisodeIndex = Number(episodeIndex);
-  const hasEpisodeIndex = Number.isFinite(parsedEpisodeIndex) && parsedEpisodeIndex >= 0;
-  const isSeriesLaunch = normalizedMediaType === "tv"
-    || (!normalizedMediaType && Boolean(normalizedSeriesId) && hasEpisodeIndex);
+  const hasEpisodeIndex =
+    Number.isFinite(parsedEpisodeIndex) && parsedEpisodeIndex >= 0;
+  const isSeriesLaunch =
+    normalizedMediaType === "tv" ||
+    (!normalizedMediaType && Boolean(normalizedSeriesId) && hasEpisodeIndex);
 
   const params = new URLSearchParams({
     title: title || "Title",
@@ -1090,7 +1313,10 @@ function getCardModalData(card) {
 
   return {
     ...getCardDetails(card),
-    thumb: card.dataset.thumb || previewImage?.getAttribute("src") || "assets/images/thumbnail.jpg",
+    thumb:
+      card.dataset.thumb ||
+      previewImage?.getAttribute("src") ||
+      "assets/images/thumbnail.jpg",
     year: card.dataset.year || "2024",
     runtime: card.dataset.runtime || "1h 40m",
     maturity: card.dataset.maturity || "16+",
@@ -1121,11 +1347,16 @@ function populateDetailsModal(details) {
 }
 
 function mapDetailsToModalPatch(rawDetails, currentDetails, mediaType) {
-  const castList = (rawDetails.credits?.cast || []).slice(0, 4).map((person) => person.name);
-  const genresList = (rawDetails.genres || []).slice(0, 4).map((genre) => genre.name);
-  const runtime = mediaType === "movie"
-    ? formatRuntime(rawDetails.runtime)
-    : formatRuntime(rawDetails.episode_run_time?.[0]);
+  const castList = (rawDetails.credits?.cast || [])
+    .slice(0, 4)
+    .map((person) => person.name);
+  const genresList = (rawDetails.genres || [])
+    .slice(0, 4)
+    .map((genre) => genre.name);
+  const runtime =
+    mediaType === "movie"
+      ? formatRuntime(rawDetails.runtime)
+      : formatRuntime(rawDetails.episode_run_time?.[0]);
 
   return {
     ...currentDetails,
@@ -1161,11 +1392,19 @@ async function hydrateModalFromTmdb(card) {
       mediaType,
     });
 
-    if (requestVersion !== detailsRequestVersion || detailsModal?.hidden || !activeDetails) {
+    if (
+      requestVersion !== detailsRequestVersion ||
+      detailsModal?.hidden ||
+      !activeDetails
+    ) {
       return;
     }
 
-    const modalPatch = mapDetailsToModalPatch(details, activeDetails, mediaType);
+    const modalPatch = mapDetailsToModalPatch(
+      details,
+      activeDetails,
+      mediaType,
+    );
     tmdbDetailsCache.set(cacheKey, modalPatch);
     activeDetails = modalPatch;
     populateDetailsModal(activeDetails);
@@ -1214,20 +1453,14 @@ function closeDetailsModal({ restoreFocus = true } = {}) {
 }
 
 if (heroTitle) {
-  const heroDestination = {
-    title: "Jeffrey Epstein: Filthy Rich",
-    episode: "E1 Hunting Grounds",
-    mediaType: "tv",
-    seriesId: JEFFREY_EPSTEIN_SERIES_ID,
-    episodeIndex: 0,
-  };
-
   heroTitle.style.cursor = "pointer";
-  heroTitle.addEventListener("click", () => openPlayerPage(heroDestination));
+  heroTitle.addEventListener("click", () =>
+    openPlayerPage(getJeffreyEpsteinHeroDestination()),
+  );
   heroTitle.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      openPlayerPage(heroDestination);
+      openPlayerPage(getJeffreyEpsteinHeroDestination());
     }
   });
 }
@@ -1274,12 +1507,11 @@ function attachCardInteractions(card) {
     event.stopPropagation();
     event.preventDefault();
 
-    const resumeSource = String(card.dataset.resumeSource || "").trim()
-      || (
-        card.dataset.tmdbId && card.dataset.mediaType === "movie"
-          ? `tmdb:${String(card.dataset.tmdbId).trim()}`
-          : String(card.dataset.src || "").trim()
-      );
+    const resumeSource =
+      String(card.dataset.resumeSource || "").trim() ||
+      (card.dataset.tmdbId && card.dataset.mediaType === "movie"
+        ? `tmdb:${String(card.dataset.tmdbId).trim()}`
+        : String(card.dataset.src || "").trim());
 
     if (!resumeSource) {
       return;
@@ -1364,7 +1596,6 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 syncMuteUI();
-syncPlayButtonUI();
 void loadContinueWatching();
 loadPopularTitles();
 applyAccountAvatarStyle();
@@ -1380,14 +1611,17 @@ window.addEventListener("storage", (event) => {
   }
 
   if (
-    event.key === PROFILE_AVATAR_STYLE_PREF_KEY
-    || event.key === PROFILE_AVATAR_MODE_PREF_KEY
-    || event.key === PROFILE_AVATAR_IMAGE_PREF_KEY
+    event.key === PROFILE_AVATAR_STYLE_PREF_KEY ||
+    event.key === PROFILE_AVATAR_MODE_PREF_KEY ||
+    event.key === PROFILE_AVATAR_IMAGE_PREF_KEY
   ) {
     applyAccountAvatarStyle();
   }
 
-  if (event.key === CONTINUE_WATCHING_META_KEY || event.key.startsWith(RESUME_STORAGE_PREFIX)) {
+  if (
+    event.key === CONTINUE_WATCHING_META_KEY ||
+    event.key.startsWith(RESUME_STORAGE_PREFIX)
+  ) {
     void loadContinueWatching();
   }
 });
