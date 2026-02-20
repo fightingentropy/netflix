@@ -80,12 +80,15 @@ let audioOptions = [];
 let subtitleOptions = [];
 let nativePlaybackLaunched = false;
 let activeAudioTab = "subtitles";
+let seriesEpisodeThumbHydrationTask = null;
+let hasHydratedSeriesEpisodeThumbs = false;
 
 const params = new URLSearchParams(window.location.search);
 const DEFAULT_TRAILER_SOURCE = "assets/videos/intro.mp4";
 const LOCAL_TATE_LEGACY_SOURCE = "assets/videos/tate-full.mp4";
 const LOCAL_TATE_SOURCE = "assets/videos/local/tate-part-1/video.mp4";
 const LOCAL_TATE_THUMBNAIL = "assets/videos/local/tate-part-1/thumbnail.jpg";
+const DEFAULT_EPISODE_THUMBNAIL = "assets/images/thumbnail.jpg";
 const SERIES_LIBRARY = Object.freeze({
   "jeffrey-epstein-filthy-rich": {
     id: "jeffrey-epstein-filthy-rich",
@@ -911,7 +914,7 @@ function getCanonicalContinueWatchingMetadata() {
       episodeIndex: isSeriesPlayback ? seriesEpisodeIndex : -1,
       year: String(year || ""),
       thumb: isSeriesPlayback
-        ? String(activeSeriesEpisode?.thumb || "assets/images/thumbnail.jpg")
+        ? String(activeSeriesEpisode?.thumb || DEFAULT_EPISODE_THUMBNAIL)
         : "",
     };
   }
@@ -2766,6 +2769,148 @@ function getSeriesEpisodeLabel(index, episodeTitle) {
   return `E${index + 1} ${String(episodeTitle || "").trim()}`;
 }
 
+function getSeriesEpisodeSeasonNumber(episodeEntry) {
+  const parsed = Number(episodeEntry?.seasonNumber || 1);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.max(1, Math.floor(parsed));
+}
+
+function getSeriesEpisodeOrdinalNumber(episodeEntry, index) {
+  const parsed = Number(episodeEntry?.episodeNumber || index + 1);
+  if (!Number.isFinite(parsed)) {
+    return index + 1;
+  }
+  return Math.max(1, Math.floor(parsed));
+}
+
+function buildSeriesEpisodeIdentityKey(season, episode) {
+  return `s${Math.max(1, Math.floor(Number(season) || 1))}e${Math.max(1, Math.floor(Number(episode) || 1))}`;
+}
+
+function isFallbackEpisodeThumbnail(thumbValue) {
+  const normalized = String(thumbValue || "").trim();
+  return !normalized || normalized === DEFAULT_EPISODE_THUMBNAIL;
+}
+
+async function fetchSeriesEpisodeStillMap() {
+  const seriesTmdbId = String(activeSeries?.tmdbId || "").trim();
+  if (!seriesTmdbId || !seriesEpisodes.length) {
+    return new Map();
+  }
+
+  const uniqueSeasons = [
+    ...new Set(
+      seriesEpisodes.map((episodeEntry) =>
+        getSeriesEpisodeSeasonNumber(episodeEntry),
+      ),
+    ),
+  ];
+  if (!uniqueSeasons.length) {
+    return new Map();
+  }
+
+  const seasonPayloads = await Promise.all(
+    uniqueSeasons.map(async (season) => {
+      const query = new URLSearchParams({
+        tmdbId: seriesTmdbId,
+        seasonNumber: String(season),
+      });
+      try {
+        return await requestJson(
+          `/api/tmdb/tv/season?${query.toString()}`,
+          {},
+          25000,
+        );
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  const stillMap = new Map();
+  seasonPayloads.forEach((payload) => {
+    const imageBase = String(payload?.imageBase || "").trim();
+    const episodes = Array.isArray(payload?.episodes) ? payload.episodes : [];
+    episodes.forEach((episode) => {
+      const season = Math.max(
+        1,
+        Math.floor(Number(episode?.seasonNumber || payload?.seasonNumber || 1)),
+      );
+      const episodeNumber = Math.max(
+        1,
+        Math.floor(Number(episode?.episodeNumber || 0)),
+      );
+      if (!episodeNumber) {
+        return;
+      }
+      const stillPath = String(episode?.stillPath || "").trim();
+      const stillUrl =
+        String(episode?.stillUrl || "").trim() ||
+        (stillPath && imageBase ? `${imageBase}/w780${stillPath}` : "");
+      if (!stillUrl) {
+        return;
+      }
+      stillMap.set(
+        buildSeriesEpisodeIdentityKey(season, episodeNumber),
+        stillUrl,
+      );
+    });
+  });
+
+  return stillMap;
+}
+
+async function hydrateSeriesEpisodeThumbnails() {
+  if (!isSeriesPlayback || !activeSeries || !seriesEpisodes.length) {
+    return;
+  }
+  if (hasHydratedSeriesEpisodeThumbs) {
+    return;
+  }
+  if (seriesEpisodeThumbHydrationTask) {
+    return;
+  }
+
+  seriesEpisodeThumbHydrationTask = (async () => {
+    const stillMap = await fetchSeriesEpisodeStillMap();
+    if (!stillMap.size) {
+      return;
+    }
+
+    let hasChanges = false;
+    seriesEpisodes.forEach((episodeEntry, index) => {
+      if (!episodeEntry || !isFallbackEpisodeThumbnail(episodeEntry.thumb)) {
+        return;
+      }
+
+      const season = getSeriesEpisodeSeasonNumber(episodeEntry);
+      const episodeNumber = getSeriesEpisodeOrdinalNumber(episodeEntry, index);
+      const stillUrl = stillMap.get(
+        buildSeriesEpisodeIdentityKey(season, episodeNumber),
+      );
+      if (!stillUrl || stillUrl === episodeEntry.thumb) {
+        return;
+      }
+
+      episodeEntry.thumb = stillUrl;
+      hasChanges = true;
+    });
+
+    if (hasChanges) {
+      renderSeriesEpisodePreview();
+    }
+  })()
+    .catch(() => {
+      // Ignore thumbnail hydration failures and keep static fallbacks.
+    })
+    .finally(() => {
+      hasHydratedSeriesEpisodeThumbs = true;
+      seriesEpisodeThumbHydrationTask = null;
+    });
+}
+
 function navigateToSeriesEpisode(nextIndex) {
   if (!isSeriesPlayback || !activeSeries || !seriesEpisodes.length) {
     return;
@@ -2882,7 +3027,7 @@ function renderSeriesEpisodePreview() {
 
     const thumb = document.createElement("img");
     thumb.className = "episode-preview-thumb";
-    thumb.src = String(episodeEntry.thumb || "assets/images/thumbnail.jpg");
+    thumb.src = String(episodeEntry.thumb || DEFAULT_EPISODE_THUMBNAIL);
     thumb.alt = `Episode ${index + 1} preview`;
     thumb.loading = "lazy";
     main.appendChild(thumb);
@@ -2971,6 +3116,7 @@ function syncSeriesControls() {
 setEpisodeLabel(title, episode);
 renderSeriesEpisodePreview();
 syncSeriesControls();
+void hydrateSeriesEpisodeThumbnails();
 
 function formatTime(totalSeconds) {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {

@@ -8767,6 +8767,38 @@ async function handleApi(url, request) {
     return json(details);
   }
 
+  if (url.pathname === "/api/tmdb/tv/season") {
+    const tmdbId = (url.searchParams.get("tmdbId") || "").trim();
+    const seasonNumber = normalizeEpisodeOrdinal(
+      url.searchParams.get("seasonNumber") || url.searchParams.get("season"),
+      1,
+    );
+
+    if (!/^\d+$/.test(tmdbId)) {
+      return json({ error: "Missing or invalid tmdbId query parameter." }, 400);
+    }
+
+    const season = await tmdbFetch(`/tv/${tmdbId}/season/${seasonNumber}`);
+    const episodes = Array.isArray(season?.episodes)
+      ? season.episodes.map((entry) => ({
+          episodeNumber: Number(entry?.episode_number || 0),
+          seasonNumber: Number(entry?.season_number || seasonNumber || 1),
+          stillPath: String(entry?.still_path || "").trim(),
+          stillUrl: String(entry?.still_path || "").trim()
+            ? `${TMDB_IMAGE_BASE}/w780${String(entry.still_path).trim()}`
+            : "",
+          name: String(entry?.name || "").trim(),
+        }))
+      : [];
+
+    return json({
+      tmdbId,
+      seasonNumber,
+      episodes,
+      imageBase: TMDB_IMAGE_BASE,
+    });
+  }
+
   if (url.pathname === "/api/resolve/sources") {
     const tmdbId = (url.searchParams.get("tmdbId") || "").trim();
     const mediaType = String(url.searchParams.get("mediaType") || "movie")
