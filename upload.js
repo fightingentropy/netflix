@@ -141,6 +141,9 @@ function getSelectedContentType() {
 
 function updateFormForContentType() {
   const isEpisode = getSelectedContentType() === "episode";
+  document.querySelectorAll(".movie-only").forEach((node) => {
+    node.hidden = isEpisode;
+  });
   document.querySelectorAll(".episode-only").forEach((node) => {
     node.hidden = !isEpisode;
   });
@@ -269,21 +272,25 @@ uploadForm?.addEventListener("submit", async (event) => {
 
 function readUploadMetadataFromForm() {
   const formData = new FormData(uploadForm);
+  const contentType = String(formData.get("contentType") || "movie")
+    .trim()
+    .toLowerCase();
   const transcodeAudioToAac =
     pendingCanOfferAudioTranscode &&
     transcodeAudioToAacCheckbox instanceof HTMLInputElement &&
     transcodeAudioToAacCheckbox.checked;
+  const isEpisode = contentType === "episode";
   return {
-    contentType: String(formData.get("contentType") || "movie"),
-    title: String(formData.get("title") || ""),
-    year: String(formData.get("year") || ""),
+    contentType,
+    title: isEpisode ? "" : String(formData.get("title") || ""),
+    year: isEpisode ? "" : String(formData.get("year") || ""),
     description: String(formData.get("description") || ""),
     thumb: String(formData.get("thumb") || ""),
     tmdbId: String(formData.get("tmdbId") || ""),
-    seriesTitle: String(formData.get("seriesTitle") || ""),
-    seasonNumber: Number(formData.get("seasonNumber") || 1),
-    episodeNumber: Number(formData.get("episodeNumber") || 1),
-    episodeTitle: String(formData.get("episodeTitle") || ""),
+    seriesTitle: isEpisode ? String(formData.get("seriesTitle") || "") : "",
+    seasonNumber: isEpisode ? Number(formData.get("seasonNumber") || 1) : 1,
+    episodeNumber: isEpisode ? Number(formData.get("episodeNumber") || 1) : 1,
+    episodeTitle: isEpisode ? String(formData.get("episodeTitle") || "") : "",
     transcodeAudioToAac,
   };
 }

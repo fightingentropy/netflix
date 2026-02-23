@@ -27,6 +27,8 @@ const detailsDescription = document.getElementById("detailsDescription");
 const detailsCast = document.getElementById("detailsCast");
 const detailsGenres = document.getElementById("detailsGenres");
 const detailsVibe = document.getElementById("detailsVibe");
+const detailsMoreSection = document.getElementById("detailsMoreSection");
+const detailsMoreGrid = document.getElementById("detailsMoreGrid");
 
 let activeDetails = null;
 let detailsTrigger = null;
@@ -815,7 +817,7 @@ function buildCardFromTmdb(item, genreMap, imageBase = TMDB_IMAGE_BASE) {
   card.className = "card";
   card.tabIndex = 0;
   card.dataset.title = title;
-  card.dataset.episode = "TMDB Movie";
+  card.dataset.episode = year || "";
   card.dataset.src = "";
   card.dataset.thumb = heroUrl;
   card.dataset.year = year;
@@ -981,7 +983,7 @@ function buildPridePrejudiceCard() {
   card.className = "card";
   card.tabIndex = 0;
   card.dataset.title = title;
-  card.dataset.episode = "Feature Film";
+  card.dataset.episode = year || "";
   card.dataset.src = PRIDE_PREJUDICE_SOURCE;
   card.dataset.thumb = heroUrl;
   card.dataset.year = year;
@@ -1052,7 +1054,7 @@ function buildCardFromLocalMovie(item) {
   card.className = "card";
   card.tabIndex = 0;
   card.dataset.title = title;
-  card.dataset.episode = "Feature Film";
+  card.dataset.episode = year || "";
   card.dataset.src = String(item?.src || "").trim();
   card.dataset.thumb = heroUrl;
   card.dataset.year = year;
@@ -1207,6 +1209,22 @@ function renderPopularCards(cardsToRender) {
 async function loadPopularTitles() {
   if (!cardsContainer) return;
   const cardsToRender = [buildPridePrejudiceCard()];
+  const normalizeTitleKey = (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const normalizeMovie = (movie) => {
+    if (!movie?.id) return null;
+    return {
+      ...movie,
+      genre_ids:
+        Array.isArray(movie.genre_ids) && movie.genre_ids.length
+          ? movie.genre_ids
+          : (movie.genres || []).map((genre) => genre.id).filter(Boolean),
+    };
+  };
 
   try {
     const [
@@ -1249,31 +1267,90 @@ async function loadPopularTitles() {
     localSeries.forEach((item) => {
       cardsToRender.push(buildCardFromLocalSeries(item));
     });
-    localMovies.forEach((item) => {
-      cardsToRender.push(buildCardFromLocalMovie(item));
-    });
+    const localMovieTmdbIds = new Set(
+      localMovies
+        .map((entry) => String(entry?.tmdbId || "").trim())
+        .filter(Boolean),
+    );
+    const localMovieTitleYearKeys = new Set(
+      localMovies
+        .map((entry) => {
+          const titleKey = normalizeTitleKey(entry?.title || "");
+          const yearKey = String(entry?.year || "").trim();
+          return titleKey ? `${titleKey}|${yearKey}` : "";
+        })
+        .filter(Boolean),
+    );
 
     const genreMap = new Map();
     (payload.genres || []).forEach((genre) => {
       genreMap.set(genre.id, genre.name);
     });
-
-    const normalizeMovie = (movie) => {
-      if (!movie?.id) return null;
-      return {
-        ...movie,
-        genre_ids:
-          Array.isArray(movie.genre_ids) && movie.genre_ids.length
-            ? movie.genre_ids
-            : (movie.genres || []).map((genre) => genre.id).filter(Boolean),
-      };
-    };
-
     const popularMovies = [
       normalizeMovie(darkKnightDetails),
       normalizeMovie(inceptionDetails),
       normalizeMovie(interstellarDetails),
     ].filter(Boolean);
+    const popularMoviesByTmdbId = new Map(
+      popularMovies.map((movie) => [String(movie.id), movie]),
+    );
+    const popularMoviesByTitleYearKey = new Map(
+      popularMovies.map((movie) => {
+        const titleKey = normalizeTitleKey(movie?.title || movie?.name || "");
+        const yearKey = String(
+          movie?.release_date || movie?.first_air_date || "",
+        ).slice(0, 4);
+        return [`${titleKey}|${yearKey}`, movie];
+      }),
+    );
+    const localTmdbIdsNeedingFetch = Array.from(localMovieTmdbIds).filter(
+      (tmdbId) => !popularMoviesByTmdbId.has(tmdbId),
+    );
+    const fetchedLocalTmdbEntries = await Promise.all(
+      localTmdbIdsNeedingFetch.map(async (tmdbId) => {
+        try {
+          const details = await apiFetch("/api/tmdb/details", {
+            tmdbId,
+            mediaType: "movie",
+          });
+          return [tmdbId, normalizeMovie(details)];
+        } catch {
+          return [tmdbId, null];
+        }
+      }),
+    );
+    fetchedLocalTmdbEntries.forEach(([tmdbId, details]) => {
+      if (tmdbId && details) {
+        popularMoviesByTmdbId.set(String(tmdbId), details);
+      }
+    });
+
+    localMovies.forEach((item) => {
+      const localSrc = String(item?.src || "").trim();
+      if (!localSrc) {
+        return;
+      }
+      const localTmdbId = String(item?.tmdbId || "").trim();
+      const localTitleYearKey = (() => {
+        const titleKey = normalizeTitleKey(item?.title || "");
+        const yearKey = String(item?.year || "").trim();
+        return titleKey ? `${titleKey}|${yearKey}` : "";
+      })();
+      const tmdbMovie =
+        (localTmdbId ? popularMoviesByTmdbId.get(localTmdbId) : null) ||
+        (localTitleYearKey
+          ? popularMoviesByTitleYearKey.get(localTitleYearKey)
+          : null) ||
+        null;
+      if (tmdbMovie) {
+        const card = buildCardFromTmdb(tmdbMovie, genreMap, payload.imageBase);
+        card.dataset.src = localSrc;
+        cardsToRender.push(card);
+        return;
+      }
+      cardsToRender.push(buildCardFromLocalMovie(item));
+    });
+
     const breakingBadSeries =
       breakingBadDetails && typeof breakingBadDetails === "object"
         ? breakingBadDetails
@@ -1296,6 +1373,18 @@ async function loadPopularTitles() {
       cardsToRender.push(buildCardFromTmdbSeries(breakingBadSeries, imageBase));
     }
     popularMovies.forEach((item) => {
+      const tmdbId = String(item?.id || "").trim();
+      const titleKey = normalizeTitleKey(item?.title || item?.name || "");
+      const yearKey = String(
+        item?.release_date || item?.first_air_date || "",
+      ).slice(0, 4);
+      const titleYearKey = titleKey ? `${titleKey}|${yearKey}` : "";
+      if (
+        (tmdbId && localMovieTmdbIds.has(tmdbId)) ||
+        (titleYearKey && localMovieTitleYearKeys.has(titleYearKey))
+      ) {
+        return;
+      }
       cardsToRender.push(buildCardFromTmdb(item, genreMap, imageBase));
     });
   } catch (error) {
@@ -1560,6 +1649,120 @@ function getCardModalData(card) {
   };
 }
 
+function hasPlayableDestination(details) {
+  return Boolean(
+    String(details?.src || "").trim() ||
+    String(details?.tmdbId || "").trim() ||
+    String(details?.seriesId || "").trim(),
+  );
+}
+
+function getRecommendationIdentity(details) {
+  const src = String(details?.src || "")
+    .trim()
+    .toLowerCase();
+  if (src) {
+    return `src:${src}`;
+  }
+  const mediaType = String(details?.mediaType || "")
+    .trim()
+    .toLowerCase();
+  const tmdbId = String(details?.tmdbId || "").trim();
+  if (mediaType && tmdbId) {
+    return `tmdb:${mediaType}:${tmdbId}`;
+  }
+  const seriesId = String(details?.seriesId || "")
+    .trim()
+    .toLowerCase();
+  if (seriesId) {
+    const episodeIndex = Number(details?.episodeIndex);
+    return Number.isFinite(episodeIndex) && episodeIndex >= 0
+      ? `series:${seriesId}:episode:${Math.floor(episodeIndex)}`
+      : `series:${seriesId}`;
+  }
+  const title = String(details?.title || "")
+    .trim()
+    .toLowerCase();
+  const year = String(details?.year || "").trim();
+  return title ? `title:${title}|${year}` : "";
+}
+
+function renderDetailsRecommendations(currentCard) {
+  if (!detailsMoreSection || !detailsMoreGrid) {
+    return;
+  }
+
+  const currentDetails = getCardDetails(currentCard);
+  const currentIdentity = getRecommendationIdentity(currentDetails);
+  const seen = new Set(currentIdentity ? [currentIdentity] : []);
+  const recommendations = [];
+  const allCards = Array.from(document.querySelectorAll(".card"));
+
+  allCards.forEach((candidateCard) => {
+    if (candidateCard === currentCard || recommendations.length >= 6) {
+      return;
+    }
+    const details = getCardDetails(candidateCard);
+    if (!hasPlayableDestination(details)) {
+      return;
+    }
+    const identity = getRecommendationIdentity(details);
+    if (!identity || seen.has(identity)) {
+      return;
+    }
+    seen.add(identity);
+    recommendations.push({
+      details,
+      title:
+        String(candidateCard.dataset.title || "").trim() ||
+        String(details.title || "").trim() ||
+        "Untitled",
+      thumb:
+        String(candidateCard.dataset.thumb || "").trim() ||
+        candidateCard.querySelector("img")?.getAttribute("src") ||
+        "assets/images/thumbnail.jpg",
+    });
+  });
+
+  detailsMoreGrid.innerHTML = "";
+  detailsMoreSection.hidden = recommendations.length === 0;
+  if (!recommendations.length) {
+    return;
+  }
+
+  recommendations.forEach((entry) => {
+    const safeTitle = String(entry.title || "").trim() || "Untitled";
+    const item = document.createElement("article");
+    item.className = "details-item";
+    item.tabIndex = 0;
+    item.setAttribute("role", "button");
+    item.setAttribute("aria-label", `Open ${safeTitle}`);
+    item.innerHTML = `
+      <img src="${entry.thumb}" alt="${escapeHtml(safeTitle)} artwork" loading="lazy" />
+      <p>${escapeHtml(safeTitle)}</p>
+    `;
+
+    const openSuggestion = () => {
+      activeDetails = {
+        ...entry.details,
+        title: safeTitle,
+        thumb: entry.thumb,
+      };
+      closeDetailsModal({ restoreFocus: false });
+      openPlayerPage(activeDetails);
+    };
+
+    item.addEventListener("click", openSuggestion);
+    item.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openSuggestion();
+      }
+    });
+    detailsMoreGrid.appendChild(item);
+  });
+}
+
 function populateDetailsModal(details) {
   if (!detailsModal) return;
 
@@ -1655,6 +1858,7 @@ function openDetailsModal(card, trigger) {
   activeDetails = getCardModalData(card);
   detailsTrigger = trigger || null;
   populateDetailsModal(activeDetails);
+  renderDetailsRecommendations(card);
   detailsModal.hidden = false;
   requestAnimationFrame(() => {
     detailsModal.classList.add("is-open");

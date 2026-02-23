@@ -1,5 +1,16 @@
 {
-  "movies": [],
+  "movies": [
+    {
+      "id": "local-movie-the-dark-knight",
+      "title": "The Dark Knight",
+      "tmdbId": "155",
+      "year": "2008",
+      "src": "assets/videos/the-dark-knight-20260223234900-ql7an0.mp4",
+      "thumb": "assets/images/thumbnail.jpg",
+      "description": "",
+      "uploadedAt": 1771890545405
+    }
+  ],
   "series": [
     {
       "id": "local-series-breaking-bad",
