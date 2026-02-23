@@ -34,8 +34,6 @@ const playerShell = document.querySelector(".player-shell");
 
 const playbackRates = [0.5, 0.75, 1, 1.25, 1.5];
 const controlsHideDelayMs = 3000;
-const sessionProgressSyncIntervalMs = 10000;
-const sessionProgressMinimumDeltaSeconds = 2;
 const singleClickToggleDelayMs = 220;
 const seekLoadingTimeoutMs = 9000;
 
@@ -61,12 +59,7 @@ let transcodeBaseOffsetSeconds = 0;
 let hasAppliedInitialResume = false;
 let pendingTranscodeSeekRatio = null;
 let pendingStandardSeekRatio = null;
-let activePlaybackSession = null;
-let isSyncingSessionProgress = false;
-let lastSessionProgressSyncAt = 0;
-let lastSessionProgressSyncedPosition = -1;
 let hlsInstance = null;
-let hasReportedSourceSuccess = false;
 let activeTrackSourceInput = "";
 let selectedAudioStreamIndex = -1;
 let selectedSubtitleStreamIndex = -1;
@@ -1264,18 +1257,6 @@ function hideResolver() {
 
 function hasActiveSource() {
   return Boolean(video.currentSrc || video.getAttribute("src"));
-}
-
-function canSyncPlaybackSession() {
-  return false;
-}
-
-function resetPlaybackSessionState() {
-  activePlaybackSession = null;
-  isSyncingSessionProgress = false;
-  lastSessionProgressSyncAt = 0;
-  lastSessionProgressSyncedPosition = -1;
-  hasReportedSourceSuccess = false;
 }
 
 function getLanguageDisplayLabel(langCode) {
@@ -2784,7 +2765,6 @@ async function resolveTmdbSourcesAndPlay({
       "Selected source is unavailable right now. Try another source.",
     );
   }
-  activePlaybackSession = resolved?.session || null;
   activeTrackSourceInput = String(resolved?.sourceInput || "").trim();
   availableAudioTracks = Array.isArray(resolved?.tracks?.audioTracks)
     ? resolved.tracks.audioTracks
@@ -3433,9 +3413,7 @@ function syncAudioState() {
 }
 
 function getCurrentAudioSyncSourceHash() {
-  return normalizeSourceHash(
-    selectedSourceHash || activePlaybackSession?.sourceHash || "",
-  );
+  return normalizeSourceHash(selectedSourceHash || "");
 }
 
 async function adjustSourceAudioSync(deltaMs = 0) {
@@ -3799,115 +3777,6 @@ function persistResumeTime(force = false) {
     lastPersistedResumeAt = now;
   } catch {
     // Ignore storage access issues.
-  }
-}
-
-function buildPlaybackSessionProgressPayload(
-  positionSeconds,
-  healthState = "healthy",
-  lastError = "",
-  eventType = "",
-) {
-  const sourceHash = String(activePlaybackSession?.sourceHash || "").trim();
-  return {
-    tmdbId,
-    audioLang: preferredAudioLang,
-    quality: preferredQuality,
-    positionSeconds: Math.max(0, Number(positionSeconds) || 0),
-    healthState,
-    lastError: String(lastError || ""),
-    sourceHash,
-    eventType: String(eventType || ""),
-  };
-}
-
-function sendPlaybackSessionProgressBeacon(
-  positionSeconds,
-  healthState = "healthy",
-  lastError = "",
-  eventType = "",
-) {
-  if (!canSyncPlaybackSession() || typeof navigator.sendBeacon !== "function") {
-    return;
-  }
-
-  const payload = buildPlaybackSessionProgressPayload(
-    positionSeconds,
-    healthState,
-    lastError,
-    eventType,
-  );
-  const blob = new Blob([JSON.stringify(payload)], {
-    type: "application/json",
-  });
-  navigator.sendBeacon("/api/session/progress", blob);
-}
-
-async function syncPlaybackSessionProgress({
-  force = false,
-  healthState = "healthy",
-  lastError = "",
-  positionSeconds = null,
-  eventType = "",
-} = {}) {
-  if (!canSyncPlaybackSession()) {
-    return;
-  }
-
-  if (!force && isResolvingSource()) {
-    return;
-  }
-
-  if (isSyncingSessionProgress) {
-    return;
-  }
-
-  const now = Date.now();
-  const nextPosition = Number.isFinite(Number(positionSeconds))
-    ? Math.max(0, Number(positionSeconds))
-    : Math.max(0, getEffectiveCurrentTime());
-  const healthyUpdate = healthState === "healthy";
-
-  if (!force && healthyUpdate) {
-    if (now - lastSessionProgressSyncAt < sessionProgressSyncIntervalMs) {
-      return;
-    }
-    if (
-      Math.abs(nextPosition - lastSessionProgressSyncedPosition) <
-      sessionProgressMinimumDeltaSeconds
-    ) {
-      return;
-    }
-  }
-
-  isSyncingSessionProgress = true;
-  try {
-    const payload = buildPlaybackSessionProgressPayload(
-      nextPosition,
-      healthState,
-      lastError,
-      eventType,
-    );
-    const response = await requestJson(
-      "/api/session/progress",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      },
-      10000,
-    );
-    if (response?.session) {
-      activePlaybackSession = response.session;
-    }
-    lastSessionProgressSyncAt = now;
-    lastSessionProgressSyncedPosition = nextPosition;
-  } catch {
-    // Ignore sync errors; playback should continue using local state.
-  } finally {
-    isSyncingSessionProgress = false;
   }
 }
 
@@ -4568,7 +4437,6 @@ audioOptionsContainer?.addEventListener("click", async (event) => {
 
     const resumeFrom = getEffectiveCurrentTime();
     tmdbResolveRetries = 0;
-    hasReportedSourceSuccess = false;
     showResolver("Switching audio language...");
     try {
       const result = await resolveTmdbSourcesAndPlay();
@@ -4623,7 +4491,6 @@ audioOptionsContainer?.addEventListener("click", async (event) => {
   const shouldKeepEmbeddedSubtitle = shouldUseNativeEmbeddedSubtitleTrack(
     selectedSubtitleTrack,
   );
-  hasReportedSourceSuccess = false;
   showResolver("Switching audio track...");
   if (shouldKeepEmbeddedSubtitle) {
     setVideoSource(
@@ -4703,7 +4570,6 @@ subtitleOptionsContainer?.addEventListener("click", async (event) => {
   ) {
     const resumeFrom = getEffectiveCurrentTime();
     const wasPaused = video.paused;
-    hasReportedSourceSuccess = false;
     showResolver(
       selectedSubtitleStreamIndex >= 0
         ? "Switching subtitles..."
@@ -4771,7 +4637,6 @@ async function handleSourceOptionSelection(nextSourceHash) {
   const resumeFrom = getEffectiveCurrentTime();
   const wasPaused = video.paused;
   tmdbResolveRetries = 0;
-  hasReportedSourceSuccess = false;
   showResolver("Switching source...");
   try {
     const result = await resolveTmdbSourcesAndPlay({
@@ -5056,14 +4921,6 @@ video.addEventListener("timeupdate", () => {
     clearStreamStallRecovery();
   }
   persistResumeTime(false);
-  void syncPlaybackSessionProgress();
-  if (!hasReportedSourceSuccess && getEffectiveCurrentTime() >= 45) {
-    hasReportedSourceSuccess = true;
-    void syncPlaybackSessionProgress({
-      force: true,
-      eventType: "success",
-    });
-  }
 });
 video.addEventListener("play", syncPlayState);
 video.addEventListener("play", () => {
@@ -5079,7 +4936,6 @@ video.addEventListener("pause", () => {
 video.addEventListener("pause", () => {
   clearStreamStallRecovery();
   persistResumeTime(true);
-  void syncPlaybackSessionProgress({ force: true });
 });
 video.addEventListener("ended", () => {
   const expectedDuration = getDisplayDurationSeconds();
@@ -5091,12 +4947,6 @@ video.addEventListener("ended", () => {
     effectiveCurrent < expectedDuration - 45;
 
   if (endedTooEarly) {
-    void syncPlaybackSessionProgress({
-      force: true,
-      healthState: "invalid",
-      lastError: "Stream ended early.",
-      eventType: "ended_early",
-    });
     const recovered = attemptTmdbRecovery(
       "Stream ended early, trying another source...",
     );
@@ -5114,12 +4964,6 @@ video.addEventListener("ended", () => {
   resumeTime = 0;
   lastPersistedResumeTime = 0;
   lastPersistedResumeAt = 0;
-  void syncPlaybackSessionProgress({
-    force: true,
-    positionSeconds: 0,
-    healthState: "healthy",
-    eventType: "success",
-  });
 });
 video.addEventListener("volumechange", syncMuteState);
 video.addEventListener("canplay", () => {
@@ -5136,13 +4980,6 @@ video.addEventListener("error", () => {
   const mediaError = video.error;
   const message =
     mediaError?.message || "Resolved stream could not be played. Try again.";
-  const inferredDecodeFailure = /decode|demuxer|ffmpeg|format/i.test(message);
-  void syncPlaybackSessionProgress({
-    force: true,
-    healthState: "invalid",
-    lastError: message,
-    eventType: inferredDecodeFailure ? "decode_failure" : "playback_error",
-  });
 
   if (attemptTmdbRecovery("Trying alternate source...")) {
     return;
@@ -5323,12 +5160,6 @@ window.addEventListener("beforeunload", () => {
   clearControlsHideTimer();
   clearStreamStallRecovery();
   persistResumeTime(true);
-  sendPlaybackSessionProgressBeacon(
-    getEffectiveCurrentTime(),
-    "healthy",
-    "",
-    hasReportedSourceSuccess ? "success" : "",
-  );
   destroyHlsInstance();
 });
 
@@ -5336,7 +5167,6 @@ async function initPlaybackSource() {
   hasAppliedInitialResume = false;
   nativePlaybackLaunched = false;
   pendingTranscodeSeekRatio = null;
-  resetPlaybackSessionState();
   availableAudioTracks = [];
   availableSubtitleTracks = [];
   selectedAudioStreamIndex = -1;
