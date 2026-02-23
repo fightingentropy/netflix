@@ -2,6 +2,34 @@
   "movies": [],
   "series": [
     {
+      "id": "local-series-breaking-bad",
+      "title": "Breaking Bad",
+      "tmdbId": "1396",
+      "year": "2008",
+      "preferredContainer": "mp4",
+      "requiresLocalEpisodeSources": true,
+      "episodes": [
+        {
+          "title": "Pilot",
+          "description": "",
+          "thumb": "assets/images/thumbnail.jpg",
+          "src": "assets/videos/pilot-20260223220149-zt5nf9-browser.mp4",
+          "seasonNumber": 1,
+          "episodeNumber": 1,
+          "uploadedAt": 1771887233859
+        },
+        {
+          "title": "Cat's in the Bag...",
+          "description": "",
+          "thumb": "assets/images/thumbnail.jpg",
+          "src": "assets/videos/cat-s-in-the-bag-20260223225953-rra19v-browser.mp4",
+          "seasonNumber": 1,
+          "episodeNumber": 2,
+          "uploadedAt": 1771887593234
+        }
+      ]
+    },
+    {
       "id": "local-series-jeffrey-epstein-filthy-rich",
       "title": "Jeffrey Epstein: Filthy Rich",
       "tmdbId": "103506",

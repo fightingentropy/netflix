@@ -34,6 +34,26 @@
                     <span>or click to browse</span>
                 </label>
 
+                <div
+                    id="compatibilityActions"
+                    class="compatibility-actions"
+                    hidden
+                >
+                    <label class="compatibility-toggle">
+                        <input
+                            id="transcodeAudioToAac"
+                            name="transcodeAudioToAac"
+                            type="checkbox"
+                            checked
+                        />
+                        <span>
+                            Audio not browser-compatible? Fast-fix by
+                            transcoding audio to <code>AAC</code> while keeping
+                            original video codec (including H.265/HEVC).
+                        </span>
+                    </label>
+                </div>
+
                 <form id="uploadForm" class="metadata-form" autocomplete="off">
                     <input name="tmdbId" type="hidden" />
                     <fieldset>
@@ -124,6 +144,25 @@
                         Upload
                     </button>
                 </form>
+
+                <div
+                    id="uploadProgressWrap"
+                    class="upload-progress"
+                    hidden
+                    aria-live="polite"
+                >
+                    <div class="upload-progress-label">
+                        <span id="uploadProgressText">Uploading... 0%</span>
+                        <span id="uploadProgressBytes">0 B / 0 B</span>
+                    </div>
+                    <div class="upload-progress-track" role="presentation">
+                        <div
+                            id="uploadProgressBar"
+                            class="upload-progress-bar"
+                            style="width: 0%"
+                        ></div>
+                    </div>
+                </div>
 
                 <p id="status" class="status" aria-live="polite"></p>
             </section>

@@ -1504,6 +1504,16 @@ function openPlayerPage({
     }
   }
 
+  const normalizedSource = String(src || "")
+    .trim()
+    .toLowerCase();
+  const isUploadedLocalMedia =
+    normalizedSource.startsWith("/media/") ||
+    normalizedSource.includes("/media/");
+  if (src && isUploadedLocalMedia && !params.has("audioLang")) {
+    params.set("audioLang", "en");
+  }
+
   if (!src && !tmdbId && !normalizedSeriesId) {
     params.set("src", "assets/videos/intro.mp4");
   }

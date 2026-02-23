@@ -739,6 +739,32 @@ async function convertMkvToMp4Lossless(inputPath, outputPath) {
   );
 }
 
+async function convertMediaAudioToAacKeepingVideo(inputPath, outputPath) {
+  await runProcessAndCapture(
+    [
+      "ffmpeg",
+      "-hide_banner",
+      "-y",
+      "-i",
+      inputPath,
+      "-map",
+      "0:v",
+      "-map",
+      "0:a?",
+      "-c:v",
+      "copy",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "256k",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ],
+    { timeoutMs: 2 * 60 * 60 * 1000, binary: false },
+  );
+}
+
 function normalizeInferredUploadMetadata(value = {}) {
   const contentType = normalizeUploadContentType(value.contentType);
   const inferred = {
@@ -1309,6 +1335,22 @@ function sweepUploadSessions() {
 }
 
 function buildUploadMetadataFromObject(payload = {}) {
+  const transcodeAudioToAacValue = payload?.transcodeAudioToAac;
+  const transcodeAudioToAac =
+    transcodeAudioToAacValue === true ||
+    transcodeAudioToAacValue === 1 ||
+    String(transcodeAudioToAacValue || "")
+      .trim()
+      .toLowerCase() === "true" ||
+    String(transcodeAudioToAacValue || "")
+      .trim()
+      .toLowerCase() === "1" ||
+    String(transcodeAudioToAacValue || "")
+      .trim()
+      .toLowerCase() === "yes" ||
+    String(transcodeAudioToAacValue || "")
+      .trim()
+      .toLowerCase() === "on";
   return {
     contentType: String(payload?.contentType || "movie")
       .trim()
@@ -1328,7 +1370,145 @@ function buildUploadMetadataFromObject(payload = {}) {
     episodeTitle: normalizeWhitespace(payload?.episodeTitle || ""),
     seriesTitle: normalizeWhitespace(payload?.seriesTitle || ""),
     seriesId: normalizeWhitespace(payload?.seriesId || ""),
+    transcodeAudioToAac,
   };
+}
+
+function normalizeProbeCodecName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+const CHROME_SUPPORTED_VIDEO_CODECS = new Set([
+  "h264",
+  "avc1",
+  "hevc",
+  "h265",
+  "hev1",
+  "hvc1",
+  "vp8",
+  "vp9",
+  "av1",
+  "mpeg4",
+  "theora",
+]);
+
+const CHROME_SUPPORTED_AUDIO_CODECS = new Set([
+  "aac",
+  "mp3",
+  "opus",
+  "vorbis",
+  "flac",
+  "pcm_s16le",
+  "pcm_s24le",
+]);
+
+function shouldAttemptAudioOnlyUploadTranscode(compatibility) {
+  if (!compatibility || compatibility.checked === false) {
+    return false;
+  }
+
+  const container = String(compatibility.container || "")
+    .trim()
+    .toLowerCase();
+  if (!container.includes("mp4")) {
+    return false;
+  }
+
+  const videoCodec = normalizeProbeCodecName(compatibility.videoCodec || "");
+  if (!videoCodec || !CHROME_SUPPORTED_VIDEO_CODECS.has(videoCodec)) {
+    return false;
+  }
+
+  const audioCodecs = Array.isArray(compatibility.audioCodecs)
+    ? compatibility.audioCodecs.map((codec) => normalizeProbeCodecName(codec))
+    : [];
+  return audioCodecs.some(
+    (codec) => codec && !CHROME_SUPPORTED_AUDIO_CODECS.has(codec),
+  );
+}
+
+function detectChromeCompatibilityFromProbe(probe) {
+  const formatName = String(probe?.formatName || "")
+    .trim()
+    .toLowerCase();
+  const videoCodec = normalizeProbeCodecName(probe?.videoCodec || "");
+  const audioTracks = Array.isArray(probe?.audioTracks)
+    ? probe.audioTracks
+    : [];
+  const audioCodecs = [
+    ...new Set(
+      audioTracks
+        .map((track) => normalizeProbeCodecName(track?.codec || ""))
+        .filter(Boolean),
+    ),
+  ];
+
+  const compatibility = {
+    checked: true,
+    isLikelyCompatible: true,
+    container: formatName,
+    videoCodec,
+    audioCodecs,
+    reasons: [],
+    warning: "",
+  };
+
+  if (!formatName.includes("mp4")) {
+    compatibility.isLikelyCompatible = false;
+    compatibility.reasons.push(
+      `Container '${formatName || "unknown"}' may not be broadly supported in Chrome for this app.`,
+    );
+  }
+
+  if (videoCodec && !CHROME_SUPPORTED_VIDEO_CODECS.has(videoCodec)) {
+    compatibility.isLikelyCompatible = false;
+    compatibility.reasons.push(
+      `Video codec '${videoCodec}' is likely not Chrome-compatible.`,
+    );
+  }
+
+  if (!videoCodec) {
+    compatibility.isLikelyCompatible = false;
+    compatibility.reasons.push("Could not determine video codec.");
+  }
+
+  const unsupportedAudioCodecs = audioCodecs.filter(
+    (codec) => !CHROME_SUPPORTED_AUDIO_CODECS.has(codec),
+  );
+  if (unsupportedAudioCodecs.length) {
+    compatibility.isLikelyCompatible = false;
+    compatibility.reasons.push(
+      `Audio codec(s) ${unsupportedAudioCodecs.map((codec) => `'${codec}'`).join(", ")} are likely not Chrome-compatible.`,
+    );
+  }
+
+  if (compatibility.reasons.length) {
+    compatibility.warning = compatibility.reasons.join(" ");
+  }
+
+  return compatibility;
+}
+
+async function detectChromeCompatibilityForSource(source) {
+  try {
+    const probe = await probeMediaTracks(source);
+    return detectChromeCompatibilityFromProbe(probe);
+  } catch (error) {
+    return {
+      checked: false,
+      isLikelyCompatible: true,
+      container: "",
+      videoCodec: "",
+      audioCodecs: [],
+      reasons: [],
+      warning:
+        error instanceof Error
+          ? `Compatibility check failed: ${error.message}`
+          : "Compatibility check failed.",
+    };
+  }
 }
 
 async function processUploadedMediaIntoLibrary({
@@ -1381,9 +1561,10 @@ async function processUploadedMediaIntoLibrary({
 
   await ensureUploadDirectories();
   const uploadBaseName = contentType === "movie" ? movieTitle : episodeTitle;
-  const outputFileName = buildUniqueMp4Filename(uploadBaseName || sourceName);
-  const outputPath = join(VIDEOS_DIR, outputFileName);
+  let outputFileName = buildUniqueMp4Filename(uploadBaseName || sourceName);
+  let outputPath = join(VIDEOS_DIR, outputFileName);
   let convertedFromMkv = false;
+  let audioTranscodedToAac = false;
 
   try {
     if (detectedExt === ".mp4") {
@@ -1399,7 +1580,32 @@ async function processUploadedMediaIntoLibrary({
     throw error;
   }
 
-  const sourcePath = buildAssetVideoSource(outputFileName);
+  let sourcePath = buildAssetVideoSource(outputFileName);
+  let chromeCompatibility =
+    await detectChromeCompatibilityForSource(sourcePath);
+
+  const shouldTranscodeAudioToAac =
+    metadata?.transcodeAudioToAac === true &&
+    shouldAttemptAudioOnlyUploadTranscode(chromeCompatibility);
+  if (shouldTranscodeAudioToAac) {
+    const aacFileName = buildUniqueMp4Filename(
+      `${uploadBaseName || sourceName}-aac`,
+    );
+    const aacPath = join(VIDEOS_DIR, aacFileName);
+    try {
+      await convertMediaAudioToAacKeepingVideo(outputPath, aacPath);
+      await removeFileIfPresent(outputPath);
+      outputFileName = aacFileName;
+      outputPath = aacPath;
+      sourcePath = buildAssetVideoSource(outputFileName);
+      chromeCompatibility =
+        await detectChromeCompatibilityForSource(sourcePath);
+      audioTranscodedToAac = true;
+    } catch {
+      await removeFileIfPresent(aacPath);
+    }
+  }
+
   const library = await readLocalLibrary();
 
   if (contentType === "movie") {
@@ -1429,6 +1635,8 @@ async function processUploadedMediaIntoLibrary({
       contentType: "movie",
       movie: entry,
       convertedFromMkv,
+      audioTranscodedToAac,
+      chromeCompatibility,
     };
   }
 
@@ -1544,6 +1752,8 @@ async function processUploadedMediaIntoLibrary({
     series: targetSeries,
     episode: episodeEntry,
     convertedFromMkv,
+    audioTranscodedToAac,
+    chromeCompatibility,
   };
 }
 
@@ -10625,6 +10835,59 @@ async function handleApi(url, request) {
     return json({
       ok: true,
       session: buildPlaybackSessionPayload(nextSession || existing),
+    });
+  }
+
+  if (url.pathname === "/api/media/tracks") {
+    const sourceInput = toAbsolutePlaybackUrl(
+      url.searchParams.get("input") || "",
+      url,
+    );
+    if (!sourceInput) {
+      return json({ error: "Missing input query parameter." }, 400);
+    }
+
+    const preferredAudioLang = normalizePreferredAudioLang(
+      url.searchParams.get("audioLang"),
+    );
+    const preferredSubtitleLang = normalizeSubtitlePreference(
+      url.searchParams.get("subtitleLang"),
+    );
+
+    let tracks = {
+      durationSeconds: 0,
+      audioTracks: [],
+      subtitleTracks: [],
+    };
+    let selectedAudioStreamIndex = -1;
+    let selectedSubtitleStreamIndex = -1;
+
+    try {
+      tracks = await probeMediaTracks(sourceInput);
+      const audioTrack = chooseAudioTrackFromProbe(tracks, preferredAudioLang);
+      const subtitleTrack = chooseSubtitleTrackFromProbe(
+        tracks,
+        preferredSubtitleLang,
+      );
+      selectedAudioStreamIndex = Number.isInteger(audioTrack?.streamIndex)
+        ? audioTrack.streamIndex
+        : -1;
+      selectedSubtitleStreamIndex = Number.isInteger(subtitleTrack?.streamIndex)
+        ? subtitleTrack.streamIndex
+        : -1;
+    } catch {
+      // Track probing is optional; clients fall back to direct playback.
+    }
+
+    return json({
+      tracks,
+      selectedAudioStreamIndex,
+      selectedSubtitleStreamIndex,
+      preferences: {
+        audioLang: preferredAudioLang,
+        subtitleLang: preferredSubtitleLang,
+      },
+      sourceInput,
     });
   }
 

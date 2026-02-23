@@ -3,15 +3,116 @@ const dropZone = document.getElementById("dropZone");
 const uploadForm = document.getElementById("uploadForm");
 const submitButton = document.getElementById("submitButton");
 const statusNode = document.getElementById("status");
+const uploadProgressWrap = document.getElementById("uploadProgressWrap");
+const uploadProgressText = document.getElementById("uploadProgressText");
+const uploadProgressBytes = document.getElementById("uploadProgressBytes");
+const uploadProgressBar = document.getElementById("uploadProgressBar");
+const compatibilityActions = document.getElementById("compatibilityActions");
+const transcodeAudioToAacCheckbox = document.getElementById(
+  "transcodeAudioToAac",
+);
 
 let selectedFile = null;
+let pendingCompatibilityWarning = "";
+let pendingCanOfferAudioTranscode = false;
+
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let unitIndex = -1;
+  let scaled = bytes;
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+  return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function setUploadProgress(uploadedBytes, totalBytes) {
+  const safeTotal = Math.max(1, Number(totalBytes) || 1);
+  const safeUploaded = Math.max(
+    0,
+    Math.min(safeTotal, Math.floor(Number(uploadedBytes) || 0)),
+  );
+  const percent = Math.max(
+    0,
+    Math.min(100, Math.round((safeUploaded / safeTotal) * 100)),
+  );
+
+  if (uploadProgressWrap) {
+    uploadProgressWrap.hidden = false;
+  }
+  if (uploadProgressBar) {
+    uploadProgressBar.style.width = `${percent}%`;
+  }
+  if (uploadProgressText) {
+    uploadProgressText.textContent = `Uploading... ${percent}%`;
+  }
+  if (uploadProgressBytes) {
+    uploadProgressBytes.textContent = `${formatBytes(safeUploaded)} / ${formatBytes(safeTotal)}`;
+  }
+}
+
+function hideUploadProgress() {
+  if (uploadProgressWrap) {
+    uploadProgressWrap.hidden = true;
+  }
+}
 
 function setStatus(message, type = "") {
   statusNode.textContent = String(message || "");
-  statusNode.classList.remove("error", "success");
+  statusNode.classList.remove("error", "success", "warning");
   if (type) {
     statusNode.classList.add(type);
   }
+}
+
+function detectCompatibilityInfoFromFilename(fileName) {
+  const tokens = String(fileName || "")
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean);
+  const tokenSet = new Set(tokens);
+  const reasons = [];
+  let canOfferAudioTranscode = false;
+
+  if (
+    tokenSet.has("dts") ||
+    tokenSet.has("dtshd") ||
+    tokenSet.has("dtsma") ||
+    tokenSet.has("dca")
+  ) {
+    reasons.push("Audio codec(s) 'dts' are likely not Chrome-compatible.");
+    canOfferAudioTranscode = true;
+  }
+
+  return {
+    warning: reasons.join(" "),
+    canOfferAudioTranscode,
+  };
+}
+
+function updateCompatibilityActions() {
+  const shouldShow =
+    pendingCanOfferAudioTranscode &&
+    transcodeAudioToAacCheckbox instanceof HTMLInputElement;
+  if (compatibilityActions) {
+    compatibilityActions.hidden = !shouldShow;
+  }
+  if (!shouldShow && transcodeAudioToAacCheckbox instanceof HTMLInputElement) {
+    transcodeAudioToAacCheckbox.checked = false;
+  }
+}
+
+function withCompatibilityWarning(message) {
+  const base = String(message || "").trim();
+  const warning = String(pendingCompatibilityWarning || "").trim();
+  if (!warning) {
+    return base;
+  }
+  return `${base} Warning: ${warning}`.trim();
 }
 
 function normalizeFileExtension(name) {
@@ -53,6 +154,10 @@ function selectFile(file) {
   if (!ext) {
     selectedFile = null;
     dropZone.classList.remove("has-file");
+    hideUploadProgress();
+    pendingCompatibilityWarning = "";
+    pendingCanOfferAudioTranscode = false;
+    updateCompatibilityActions();
     setStatus("Only .mp4 and .mkv files are supported.", "error");
     updateSubmitState();
     return;
@@ -60,7 +165,21 @@ function selectFile(file) {
 
   selectedFile = file;
   dropZone.classList.add("has-file");
-  setStatus(`Selected: ${file.name}`, "");
+  hideUploadProgress();
+  const compatibilityInfo = detectCompatibilityInfoFromFilename(file.name);
+  pendingCompatibilityWarning = compatibilityInfo.warning;
+  pendingCanOfferAudioTranscode = compatibilityInfo.canOfferAudioTranscode;
+  updateCompatibilityActions();
+  if (
+    pendingCanOfferAudioTranscode &&
+    transcodeAudioToAacCheckbox instanceof HTMLInputElement
+  ) {
+    transcodeAudioToAacCheckbox.checked = true;
+  }
+  setStatus(
+    withCompatibilityWarning(`Selected: ${file.name}`),
+    pendingCompatibilityWarning ? "warning" : "",
+  );
   updateSubmitState();
   void inferAndPopulateMetadata(file);
 }
@@ -103,28 +222,57 @@ uploadForm?.addEventListener("submit", async (event) => {
   }
 
   submitButton.disabled = true;
+  setUploadProgress(0, selectedFile.size);
   setStatus("Uploading and processing file...", "");
 
   try {
     const payload = await uploadViaChunkSession(selectedFile);
 
     const converted = payload?.convertedFromMkv ? " (MKV remuxed to MP4)" : "";
-    setStatus(
-      `Upload complete${converted}. Refresh Home to see it.`,
-      "success",
-    );
+    const audioConverted = payload?.audioTranscodedToAac
+      ? " (Audio transcoded to AAC)"
+      : "";
+    const conversionSummary = `${converted}${audioConverted}`;
+    const chromeCompatibility = payload?.chromeCompatibility || null;
+    const compatibilityWarning = String(
+      chromeCompatibility?.warning || "",
+    ).trim();
+    if (
+      chromeCompatibility &&
+      chromeCompatibility.isLikelyCompatible === false
+    ) {
+      setStatus(
+        `Upload complete${conversionSummary}. Warning: ${compatibilityWarning || "This file is likely not Chrome-compatible (codec/container)."} Refresh Home to see it.`,
+        "warning",
+      );
+    } else if (chromeCompatibility && chromeCompatibility.checked === false) {
+      setStatus(
+        `Upload complete${conversionSummary}. Note: could not verify Chrome compatibility. Refresh Home to see it.`,
+        "warning",
+      );
+    } else {
+      setStatus(
+        `Upload complete${conversionSummary}. Chrome compatibility looks good. Refresh Home to see it.`,
+        "success",
+      );
+    }
   } catch (error) {
     setStatus(
       error instanceof Error ? error.message : "Upload failed.",
       "error",
     );
   } finally {
+    hideUploadProgress();
     updateSubmitState();
   }
 });
 
 function readUploadMetadataFromForm() {
   const formData = new FormData(uploadForm);
+  const transcodeAudioToAac =
+    pendingCanOfferAudioTranscode &&
+    transcodeAudioToAacCheckbox instanceof HTMLInputElement &&
+    transcodeAudioToAacCheckbox.checked;
   return {
     contentType: String(formData.get("contentType") || "movie"),
     title: String(formData.get("title") || ""),
@@ -136,6 +284,7 @@ function readUploadMetadataFromForm() {
     seasonNumber: Number(formData.get("seasonNumber") || 1),
     episodeNumber: Number(formData.get("episodeNumber") || 1),
     episodeTitle: String(formData.get("episodeTitle") || ""),
+    transcodeAudioToAac,
   };
 }
 
@@ -184,13 +333,21 @@ async function uploadViaChunkSession(file) {
         chunkPayload?.error || `Chunk upload failed (${chunkResponse.status})`,
       );
     }
-    uploadedBytes = Math.min(file.size, offset + chunk.byteLength);
-    const percent = Math.max(
-      1,
-      Math.min(100, Math.round((uploadedBytes / Math.max(1, file.size)) * 100)),
+    const receivedBytes = Number(chunkPayload?.receivedBytes);
+    if (Number.isFinite(receivedBytes) && receivedBytes >= 0) {
+      uploadedBytes = Math.min(file.size, Math.floor(receivedBytes));
+    } else {
+      uploadedBytes = Math.min(file.size, offset + chunk.size);
+    }
+    setUploadProgress(uploadedBytes, file.size);
+    setStatus(
+      `Uploading... ${Math.round((uploadedBytes / Math.max(1, file.size)) * 100)}%`,
+      "",
     );
-    setStatus(`Uploading... ${percent}%`, "");
   }
+
+  setUploadProgress(file.size, file.size);
+  setStatus("Upload sent. Finalizing and processing...", "");
 
   const finishResponse = await fetch("/api/upload/session/finish", {
     method: "POST",
@@ -239,7 +396,12 @@ async function inferAndPopulateMetadata(file) {
     return;
   }
 
-  setStatus("Inferring title and episode info from filename...", "");
+  setStatus(
+    withCompatibilityWarning(
+      "Inferring title and episode info from filename...",
+    ),
+    pendingCompatibilityWarning ? "warning" : "",
+  );
 
   try {
     const response = await fetch("/api/upload/infer", {
@@ -276,12 +438,16 @@ async function inferAndPopulateMetadata(file) {
       Math.max(0, Math.min(1, confidence)) * 100,
     );
     setStatus(
-      `Selected: ${file.name} • Auto-filled metadata (${confidencePct}% confidence)`,
-      "success",
+      withCompatibilityWarning(
+        `Selected: ${file.name} • Auto-filled metadata (${confidencePct}% confidence)`,
+      ),
+      pendingCompatibilityWarning ? "warning" : "success",
     );
   } catch (error) {
     setStatus(
-      `Selected: ${file.name} • Metadata inference failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      withCompatibilityWarning(
+        `Selected: ${file.name} • Metadata inference failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      ),
       "error",
     );
   }
@@ -289,3 +455,5 @@ async function inferAndPopulateMetadata(file) {
 
 updateFormForContentType();
 updateSubmitState();
+hideUploadProgress();
+updateCompatibilityActions();

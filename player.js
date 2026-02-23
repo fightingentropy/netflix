@@ -4025,6 +4025,61 @@ async function requestJson(url, options = {}, timeoutMs = 20000) {
   }
 }
 
+async function resolveExplicitSourceTrackSelection(sourceInput) {
+  activeTrackSourceInput = String(sourceInput || "").trim();
+  if (!activeTrackSourceInput) {
+    availableAudioTracks = [];
+    availableSubtitleTracks = [];
+    selectedAudioStreamIndex = -1;
+    selectedSubtitleStreamIndex = -1;
+    rebuildTrackOptionButtons();
+    return;
+  }
+
+  const query = new URLSearchParams({ input: activeTrackSourceInput });
+  if (
+    supportedAudioLangs.has(preferredAudioLang) &&
+    preferredAudioLang !== "auto"
+  ) {
+    query.set("audioLang", preferredAudioLang);
+  }
+  if (preferredSubtitleLang && preferredSubtitleLang !== "off") {
+    query.set("subtitleLang", preferredSubtitleLang);
+  }
+
+  try {
+    const payload = await requestJson(`/api/media/tracks?${query.toString()}`);
+    availableAudioTracks = Array.isArray(payload?.tracks?.audioTracks)
+      ? payload.tracks.audioTracks
+      : [];
+    availableSubtitleTracks = Array.isArray(payload?.tracks?.subtitleTracks)
+      ? payload.tracks.subtitleTracks
+      : [];
+
+    const nextAudioStreamIndex = Number(payload?.selectedAudioStreamIndex);
+    selectedAudioStreamIndex =
+      Number.isFinite(nextAudioStreamIndex) && nextAudioStreamIndex >= 0
+        ? Math.floor(nextAudioStreamIndex)
+        : -1;
+
+    const nextSubtitleStreamIndex = Number(
+      payload?.selectedSubtitleStreamIndex,
+    );
+    selectedSubtitleStreamIndex =
+      Number.isFinite(nextSubtitleStreamIndex) && nextSubtitleStreamIndex >= 0
+        ? Math.floor(nextSubtitleStreamIndex)
+        : -1;
+  } catch {
+    // Track probing is best effort for explicit sources.
+    availableAudioTracks = [];
+    availableSubtitleTracks = [];
+    selectedAudioStreamIndex = -1;
+    selectedSubtitleStreamIndex = -1;
+  }
+
+  rebuildTrackOptionButtons();
+}
+
 async function resolveTmdbMovieViaBackend(
   tmdbMovieId,
   { allowSourceFallback = true } = {},
@@ -4556,7 +4611,7 @@ audioOptionsContainer?.addEventListener("click", async (event) => {
   syncAudioState();
   closeAudioPopover();
 
-  if (!isTmdbResolvedPlayback || !activeTrackSourceInput) {
+  if (!activeTrackSourceInput) {
     return;
   }
 
@@ -5292,8 +5347,19 @@ async function initPlaybackSource() {
   if (hasExplicitSource) {
     tmdbExpectedDurationSeconds = 0;
     hideResolver();
-    const nextSource = shouldUseSoftwareDecode(src)
-      ? buildSoftwareDecodeUrl(src, 0, -1, preferredAudioSyncMs)
+    await resolveExplicitSourceTrackSelection(src);
+    const shouldUseRemux =
+      shouldUseSoftwareDecode(src) ||
+      selectedAudioStreamIndex >= 0 ||
+      selectedSubtitleStreamIndex >= 0;
+    const nextSource = shouldUseRemux
+      ? buildSoftwareDecodeUrl(
+          src,
+          0,
+          selectedAudioStreamIndex,
+          preferredAudioSyncMs,
+          selectedSubtitleStreamIndex,
+        )
       : src;
     if (await tryLaunchNativePlayback(nextSource, resumeTime)) {
       return;
