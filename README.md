@@ -78,9 +78,15 @@ Current environment variables:
 
 - `TMDB_API_KEY`
 - `REAL_DEBRID_TOKEN`
+- `CODEX_AUTH_FILE` (default: `~/.codex/auth.json`)
+- `CODEX_URL` (default: `https://chatgpt.com/backend-api/codex/responses`)
+- `CODEX_MODEL` (default: `gpt-5.2-codex`)
+- `OPENAI_API_KEY` (used for upload filename metadata inference)
+- `OPENAI_RESPONSES_MODEL` (default: `gpt-5-mini`)
 - `TORRENTIO_BASE_URL` (default: `https://torrentio.strem.fun`)
 - `HOST` (default: `127.0.0.1`)
 - `PORT` (default: `5173`)
+- `MAX_UPLOAD_BYTES` (default: `10737418240`, 10 GiB)
 - `HLS_HWACCEL`:
   - `none | auto | videotoolbox | cuda | qsv`
   - `auto` maps to `videotoolbox` on macOS, else `none`

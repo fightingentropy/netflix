@@ -88,7 +88,7 @@ const DEFAULT_TRAILER_SOURCE = "assets/videos/intro.mp4";
 const DEFAULT_EPISODE_THUMBNAIL = "assets/images/thumbnail.jpg";
 const JEFFREY_EPSTEIN_EPISODE_1_SOURCE =
   "assets/videos/Jeffrey.Epstein.Filthy.Rich.S01E01.2160p.NF.WEB-DL.DDP5.1.SDR.HEVC-DiSGUSTiNG.mp4";
-const SERIES_LIBRARY = Object.freeze({
+const STATIC_SERIES_LIBRARY = {
   "jeffrey-epstein-filthy-rich": {
     id: "jeffrey-epstein-filthy-rich",
     title: "Jeffrey Epstein: Filthy Rich",
@@ -196,6 +196,212 @@ const SERIES_LIBRARY = Object.freeze({
       },
     ],
   },
+};
+
+function cloneSeriesEpisode(entry = {}) {
+  return {
+    title: String(entry?.title || "").trim(),
+    description: String(entry?.description || "").trim(),
+    thumb: String(entry?.thumb || "").trim() || DEFAULT_EPISODE_THUMBNAIL,
+    src: String(entry?.src || "").trim(),
+    seasonNumber: Math.max(1, Math.floor(Number(entry?.seasonNumber || 1))),
+    episodeNumber: Math.max(1, Math.floor(Number(entry?.episodeNumber || 1))),
+  };
+}
+
+function mergeSeriesLibraries(staticLibrary = {}, localLibrary = {}) {
+  const merged = {};
+  const staticEntries = Object.entries(staticLibrary || {});
+  const staticTmdbToSeriesId = new Map();
+
+  staticEntries.forEach(([seriesId, series]) => {
+    const tmdbId = String(series?.tmdbId || "").trim();
+    if (tmdbId) {
+      staticTmdbToSeriesId.set(tmdbId, seriesId);
+    }
+    merged[seriesId] = {
+      ...series,
+      episodes: Array.isArray(series?.episodes)
+        ? series.episodes.map((episode) => cloneSeriesEpisode(episode))
+        : [],
+    };
+  });
+
+  const localEntries = Object.values(localLibrary || {});
+  localEntries.forEach((series) => {
+    const localTmdbId = String(series?.tmdbId || "").trim();
+    const localId = String(series?.id || "")
+      .trim()
+      .toLowerCase();
+    const mappedStaticId =
+      localTmdbId && staticTmdbToSeriesId.has(localTmdbId)
+        ? staticTmdbToSeriesId.get(localTmdbId)
+        : "";
+    const targetId = mappedStaticId || localId;
+    if (!targetId) {
+      return;
+    }
+
+    if (!merged[targetId]) {
+      merged[targetId] = {
+        id: targetId,
+        title: String(series?.title || "Series").trim() || "Series",
+        tmdbId: localTmdbId,
+        year: String(series?.year || "").trim(),
+        preferredContainer: "mp4",
+        requiresLocalEpisodeSources: true,
+        episodes: [],
+      };
+    }
+
+    const targetSeries = merged[targetId];
+    const targetEpisodes = Array.isArray(targetSeries.episodes)
+      ? targetSeries.episodes
+      : [];
+    const localEpisodes = Array.isArray(series?.episodes)
+      ? series.episodes
+      : [];
+
+    localEpisodes.forEach((episode) => {
+      const nextEpisode = cloneSeriesEpisode(episode);
+      if (!nextEpisode.src) {
+        return;
+      }
+      const existingIndex = targetEpisodes.findIndex(
+        (entry) =>
+          Number(entry?.seasonNumber || 1) === nextEpisode.seasonNumber &&
+          Number(entry?.episodeNumber || 1) === nextEpisode.episodeNumber,
+      );
+
+      if (existingIndex >= 0) {
+        targetEpisodes[existingIndex] = {
+          ...targetEpisodes[existingIndex],
+          src: nextEpisode.src,
+          thumb:
+            String(nextEpisode.thumb || "").trim() ||
+            String(targetEpisodes[existingIndex]?.thumb || "").trim() ||
+            DEFAULT_EPISODE_THUMBNAIL,
+          title:
+            String(targetEpisodes[existingIndex]?.title || "").trim() ||
+            nextEpisode.title,
+          description:
+            String(targetEpisodes[existingIndex]?.description || "").trim() ||
+            nextEpisode.description,
+        };
+      } else {
+        targetEpisodes.push(nextEpisode);
+      }
+    });
+
+    targetEpisodes.sort((left, right) => {
+      const seasonDelta =
+        Number(left?.seasonNumber || 1) - Number(right?.seasonNumber || 1);
+      if (seasonDelta !== 0) {
+        return seasonDelta;
+      }
+      return (
+        Number(left?.episodeNumber || 1) - Number(right?.episodeNumber || 1)
+      );
+    });
+
+    targetSeries.episodes = targetEpisodes;
+    targetSeries.requiresLocalEpisodeSources =
+      Boolean(targetSeries.requiresLocalEpisodeSources) ||
+      Boolean(series?.requiresLocalEpisodeSources);
+    if (!String(targetSeries.tmdbId || "").trim() && localTmdbId) {
+      targetSeries.tmdbId = localTmdbId;
+    }
+  });
+
+  return merged;
+}
+
+function normalizeLocalSeriesLibrary(payload) {
+  const list = Array.isArray(payload?.series) ? payload.series : [];
+  const nextLibrary = {};
+
+  list.forEach((entry) => {
+    const id = String(entry?.id || "")
+      .trim()
+      .toLowerCase();
+    const title = String(entry?.title || "").trim();
+    if (!id || !title) {
+      return;
+    }
+    const episodes = Array.isArray(entry?.episodes)
+      ? entry.episodes
+          .map((episode, index) => {
+            const src = String(episode?.src || "").trim();
+            if (!src) {
+              return null;
+            }
+            const seasonNumber = Number(episode?.seasonNumber || 1);
+            const episodeNumber = Number(episode?.episodeNumber || index + 1);
+            return {
+              title:
+                String(episode?.title || "").trim() || `Episode ${index + 1}`,
+              description: String(episode?.description || "").trim(),
+              thumb:
+                String(episode?.thumb || "").trim() ||
+                DEFAULT_EPISODE_THUMBNAIL,
+              src,
+              seasonNumber:
+                Number.isFinite(seasonNumber) && seasonNumber > 0
+                  ? Math.floor(seasonNumber)
+                  : 1,
+              episodeNumber:
+                Number.isFinite(episodeNumber) && episodeNumber > 0
+                  ? Math.floor(episodeNumber)
+                  : index + 1,
+            };
+          })
+          .filter(Boolean)
+      : [];
+    if (!episodes.length) {
+      return;
+    }
+    episodes.sort((left, right) => {
+      const seasonDelta = left.seasonNumber - right.seasonNumber;
+      if (seasonDelta !== 0) {
+        return seasonDelta;
+      }
+      return left.episodeNumber - right.episodeNumber;
+    });
+
+    nextLibrary[id] = {
+      id,
+      title,
+      tmdbId: /^\d+$/.test(String(entry?.tmdbId || "").trim())
+        ? String(entry.tmdbId).trim()
+        : "",
+      year: String(entry?.year || "").trim(),
+      preferredContainer: "mp4",
+      requiresLocalEpisodeSources: true,
+      episodes,
+    };
+  });
+
+  return nextLibrary;
+}
+
+async function fetchLocalSeriesLibrary() {
+  try {
+    const response = await fetch("/api/library");
+    if (!response.ok) {
+      return {};
+    }
+    const payload = await response.json().catch(() => null);
+    return normalizeLocalSeriesLibrary(payload || {});
+  } catch {
+    return {};
+  }
+}
+
+const SERIES_LIBRARY = Object.freeze({
+  ...mergeSeriesLibraries(
+    STATIC_SERIES_LIBRARY,
+    await fetchLocalSeriesLibrary(),
+  ),
 });
 const mediaTypeParam = String(params.get("mediaType") || "")
   .trim()
@@ -248,7 +454,7 @@ const rawTitle = isSeriesPlayback
   : params.get("title") || "Jeffrey Epstein: Filthy Rich";
 const rawEpisode = isSeriesPlayback
   ? `E${seriesEpisodeIndex + 1} ${activeSeriesEpisode.title}`
-  : params.get("episode") || "Official Trailer";
+  : params.get("episode") || "";
 const title = rawTitle;
 const episode = rawEpisode;
 const tmdbId = String(

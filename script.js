@@ -51,6 +51,8 @@ const BREAKING_BAD_SERIES_ID = "breaking-bad";
 const PRIDE_PREJUDICE_SOURCE =
   "assets/videos/Pride.Prejudice.2005.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.MX].mp4";
 const PRIDE_PREJUDICE_THUMBNAIL = "assets/images/pride-prejudice-thumb.jpg";
+const DEFAULT_LOCAL_THUMBNAIL = "assets/images/thumbnail.jpg";
+const HIDDEN_LOCAL_SERIES_TMDB_IDS = new Set(["103506", "1396"]);
 const supportedAudioLangs = new Set(["auto", "en", "fr", "es", "de"]);
 const supportedStreamQualityPreferences = new Set([
   "auto",
@@ -698,7 +700,7 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
   card.tabIndex = 0;
   card.dataset.resumeSource = entry.sourceIdentity;
   card.dataset.title = title;
-  card.dataset.episode = `Resume at ${formatResumeTimestamp(entry.resumeSeconds)}`;
+  card.dataset.episode = "";
   card.dataset.src = entry.src || "";
   card.dataset.thumb = heroUrl;
   card.dataset.year = year || (isSeriesEntry ? "Series" : "Movie");
@@ -751,7 +753,6 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
         </div>
         <div class="card-hover-meta">
           <span class="meta-age">${maturity}</span>
-          <span>${card.dataset.episode}</span>
           <span class="meta-chip">${qualityLabel}</span>
           <span class="meta-spatial">${contentTypeLabel}</span>
         </div>
@@ -1036,6 +1037,162 @@ function buildPridePrejudiceCard() {
   return card;
 }
 
+function buildCardFromLocalMovie(item) {
+  const title =
+    String(item?.title || "Uploaded Movie").trim() || "Uploaded Movie";
+  const year = String(item?.year || "").trim() || "Local";
+  const maturity = "13+";
+  const qualityLabel = "HD";
+  const posterUrl = String(item?.thumb || "").trim() || DEFAULT_LOCAL_THUMBNAIL;
+  const heroUrl = posterUrl;
+  const safeTitle = escapeHtml(title);
+  const tagLine = "Uploaded <span>&bull;</span> Local Library";
+
+  const card = document.createElement("article");
+  card.className = "card";
+  card.tabIndex = 0;
+  card.dataset.title = title;
+  card.dataset.episode = "Feature Film";
+  card.dataset.src = String(item?.src || "").trim();
+  card.dataset.thumb = heroUrl;
+  card.dataset.year = year;
+  card.dataset.runtime = "Movie";
+  card.dataset.maturity = maturity;
+  card.dataset.quality = qualityLabel;
+  card.dataset.audio = "Stereo";
+  card.dataset.description =
+    String(item?.description || "").trim() ||
+    "Uploaded from your local library.";
+  card.dataset.cast = "Local file";
+  card.dataset.genres = "Uploaded, Local";
+  card.dataset.vibe = "Personal, Local";
+  card.dataset.mediaType = "movie";
+  if (item?.tmdbId) {
+    card.dataset.tmdbId = String(item.tmdbId).trim();
+  }
+
+  card.innerHTML = `
+    <div class="card-base">
+      <img src="${posterUrl}" alt="${safeTitle}" loading="lazy" />
+      <div class="progress"><span style="width: 90%"></span></div>
+    </div>
+    <div class="card-hover">
+      <img class="card-hover-image" src="${heroUrl}" alt="${safeTitle} preview" loading="lazy" />
+      <div class="card-hover-body">
+        <div class="card-hover-controls">
+          <div class="card-hover-actions">
+            <button class="hover-round hover-play" type="button" aria-label="Play ${safeTitle}">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5v17L20 12 5 3.5Z" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Added to my list">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5L19.5 7.5" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Remove from continue watching">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke-linecap="round" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Rate thumbs up">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20H5.8A1.8 1.8 0 0 1 4 18.2V10a1.8 1.8 0 0 1 1.8-1.8H8V20Zm2 0h6a3.5 3.5 0 0 0 3.4-2.8l.8-4A2.5 2.5 0 0 0 17.75 10H14V6.6A2.6 2.6 0 0 0 11.4 4L10 9.3V20Z" /></svg>
+            </button>
+          </div>
+          <button class="hover-round hover-details" type="button" aria-label="More details">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+        </div>
+        <div class="card-hover-meta">
+          <span class="meta-age">${maturity}</span>
+          <span>${year}</span>
+          <span class="meta-chip">${qualityLabel}</span>
+          <span class="meta-spatial">Movie</span>
+        </div>
+        <p class="card-hover-tags">${tagLine}</p>
+      </div>
+    </div>
+  `;
+
+  return card;
+}
+
+function buildCardFromLocalSeries(item) {
+  const title =
+    String(item?.title || "Uploaded Series").trim() || "Uploaded Series";
+  const year = String(item?.year || "").trim() || "Local";
+  const episodes = Array.isArray(item?.episodes) ? item.episodes : [];
+  const firstEpisode = episodes[0] || null;
+  const firstEpisodeTitle =
+    String(firstEpisode?.title || "").trim() || "Episode 1";
+  const posterUrl =
+    String(firstEpisode?.thumb || "").trim() || DEFAULT_LOCAL_THUMBNAIL;
+  const heroUrl = posterUrl;
+  const safeTitle = escapeHtml(title);
+  const maturity = "13+";
+  const tagLine = "Uploaded <span>&bull;</span> Local Series";
+
+  const card = document.createElement("article");
+  card.className = "card";
+  card.tabIndex = 0;
+  card.dataset.title = title;
+  card.dataset.episode = `E1 ${firstEpisodeTitle}`;
+  card.dataset.src = "";
+  card.dataset.thumb = heroUrl;
+  card.dataset.year = year;
+  card.dataset.runtime = "Series";
+  card.dataset.maturity = maturity;
+  card.dataset.quality = "HD";
+  card.dataset.audio = "Stereo";
+  card.dataset.description =
+    String(firstEpisode?.description || "").trim() ||
+    "Uploaded episodes from your local library.";
+  card.dataset.cast = "Local file";
+  card.dataset.genres = "Uploaded, Series";
+  card.dataset.vibe = "Personal, Local";
+  card.dataset.mediaType = "tv";
+  card.dataset.seriesId = String(item?.id || "").trim();
+  card.dataset.episodeIndex = "0";
+  if (item?.tmdbId) {
+    card.dataset.tmdbId = String(item.tmdbId).trim();
+  }
+
+  card.innerHTML = `
+    <div class="card-base">
+      <img src="${posterUrl}" alt="${safeTitle}" loading="lazy" />
+      <div class="progress"><span style="width: 94%"></span></div>
+    </div>
+    <div class="card-hover">
+      <img class="card-hover-image" src="${heroUrl}" alt="${safeTitle} preview" loading="lazy" />
+      <div class="card-hover-body">
+        <div class="card-hover-controls">
+          <div class="card-hover-actions">
+            <button class="hover-round hover-play" type="button" aria-label="Play ${safeTitle}">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5v17L20 12 5 3.5Z" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Added to my list">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5L19.5 7.5" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Remove from continue watching">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke-linecap="round" /></svg>
+            </button>
+            <button class="hover-round" type="button" aria-label="Rate thumbs up">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20H5.8A1.8 1.8 0 0 1 4 18.2V10a1.8 1.8 0 0 1 1.8-1.8H8V20Zm2 0h6a3.5 3.5 0 0 0 3.4-2.8l.8-4A2.5 2.5 0 0 0 17.75 10H14V6.6A2.6 2.6 0 0 0 11.4 4L10 9.3V20Z" /></svg>
+            </button>
+          </div>
+          <button class="hover-round hover-details" type="button" aria-label="More details">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+        </div>
+        <div class="card-hover-meta">
+          <span class="meta-age">${maturity}</span>
+          <span>${year}</span>
+          <span class="meta-chip">HD</span>
+          <span class="meta-spatial">Series</span>
+        </div>
+        <p class="card-hover-tags">${tagLine}</p>
+      </div>
+    </div>
+  `;
+
+  return card;
+}
+
 function renderPopularCards(cardsToRender) {
   cardsContainer.innerHTML = "";
   cardsToRender.forEach((card, index) => {
@@ -1053,12 +1210,14 @@ async function loadPopularTitles() {
 
   try {
     const [
+      localLibrary,
       payload,
       darkKnightDetails,
       inceptionDetails,
       interstellarDetails,
       breakingBadDetails,
     ] = await Promise.all([
+      apiFetch("/api/library").catch(() => ({ movies: [], series: [] })),
       apiFetch("/api/tmdb/popular-movies", { page: "1" }),
       apiFetch("/api/tmdb/details", {
         tmdbId: "155",
@@ -1077,6 +1236,22 @@ async function loadPopularTitles() {
         mediaType: "tv",
       }).catch(() => null),
     ]);
+
+    const localSeries = Array.isArray(localLibrary?.series)
+      ? localLibrary.series.filter((entry) => {
+          const tmdbId = String(entry?.tmdbId || "").trim();
+          return !HIDDEN_LOCAL_SERIES_TMDB_IDS.has(tmdbId);
+        })
+      : [];
+    const localMovies = Array.isArray(localLibrary?.movies)
+      ? localLibrary.movies
+      : [];
+    localSeries.forEach((item) => {
+      cardsToRender.push(buildCardFromLocalSeries(item));
+    });
+    localMovies.forEach((item) => {
+      cardsToRender.push(buildCardFromLocalMovie(item));
+    });
 
     const genreMap = new Map();
     (payload.genres || []).forEach((genre) => {
@@ -1282,8 +1457,12 @@ function openPlayerPage({
 
   const params = new URLSearchParams({
     title: title || "Title",
-    episode: episode || "Now Playing",
   });
+
+  const normalizedEpisode = String(episode || "").trim();
+  if (normalizedEpisode) {
+    params.set("episode", normalizedEpisode);
+  }
 
   if (src) {
     params.set("src", src);
@@ -1336,7 +1515,7 @@ function getCardDetails(card) {
   const rawEpisodeIndex = Number(card.dataset.episodeIndex || -1);
   return {
     title: card.dataset.title || "Title",
-    episode: card.dataset.episode || "Now Playing",
+    episode: card.dataset.episode || "",
     src: card.dataset.src || "",
     thumb:
       card.dataset.thumb ||

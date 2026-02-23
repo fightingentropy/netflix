@@ -1,0 +1,42 @@
+{
+  "movies": [],
+  "series": [
+    {
+      "id": "local-series-jeffrey-epstein-filthy-rich",
+      "title": "Jeffrey Epstein: Filthy Rich",
+      "tmdbId": "103506",
+      "year": "2020",
+      "preferredContainer": "mp4",
+      "requiresLocalEpisodeSources": true,
+      "episodes": [
+        {
+          "title": "Follow the Money",
+          "description": "",
+          "thumb": "assets/images/thumbnail.jpg",
+          "src": "assets/videos/follow-the-money-20260223211431-nm6ys3-aac.mp4",
+          "seasonNumber": 1,
+          "episodeNumber": 2,
+          "uploadedAt": 1771881271730
+        },
+        {
+          "title": "The Island",
+          "description": "",
+          "thumb": "assets/images/thumbnail.jpg",
+          "src": "assets/videos/the-island-20260223215915-xlg44g.mp4",
+          "seasonNumber": 1,
+          "episodeNumber": 3,
+          "uploadedAt": 1771883955404
+        },
+        {
+          "title": "Finding Their Voice",
+          "description": "",
+          "thumb": "assets/images/thumbnail.jpg",
+          "src": "assets/videos/finding-their-voice-20260223220001-d403kv.mp4",
+          "seasonNumber": 1,
+          "episodeNumber": 4,
+          "uploadedAt": 1771884001156
+        }
+      ]
+    }
+  ]
+}

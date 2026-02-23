@@ -1,12 +1,17 @@
-import { join, normalize } from "node:path";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { basename, extname, join, normalize } from "node:path";
+import { appendFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { gunzipSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 
 const ROOT_DIR = process.cwd();
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 5173);
+const MAX_UPLOAD_BYTES = Math.max(
+  50 * 1024 * 1024,
+  Number(process.env.MAX_UPLOAD_BYTES || 10 * 1024 * 1024 * 1024),
+);
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
@@ -20,6 +25,17 @@ const OPENSUBTITLES_USER_AGENT =
 
 const TMDB_API_KEY = (process.env.TMDB_API_KEY || "").trim();
 const REAL_DEBRID_TOKEN = (process.env.REAL_DEBRID_TOKEN || "").trim();
+const CODEX_AUTH_FILE = (
+  process.env.CODEX_AUTH_FILE || join(homedir(), ".codex", "auth.json")
+).trim();
+const CODEX_URL = (
+  process.env.CODEX_URL || "https://chatgpt.com/backend-api/codex/responses"
+).trim();
+const CODEX_MODEL = (process.env.CODEX_MODEL || "gpt-5.2-codex").trim();
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
+const OPENAI_RESPONSES_MODEL = (
+  process.env.OPENAI_RESPONSES_MODEL || "gpt-5-mini"
+).trim();
 
 const DEFAULT_TRACKERS = [
   "udp://tracker.opentrackr.org:1337/announce",
@@ -37,6 +53,12 @@ const TORRENT_FATAL_STATUSES = new Set([
 ]);
 
 const VIDEO_FILE_REGEX = /\.mp4$/i;
+const ASSETS_DIR = join(ROOT_DIR, "assets");
+const VIDEOS_DIR = join(ASSETS_DIR, "videos");
+const LOCAL_LIBRARY_PATH = join(ASSETS_DIR, "library.json");
+const UPLOAD_TEMP_DIR = join(ROOT_DIR, "cache", "uploads");
+const UPLOAD_SESSION_STALE_MS = 6 * 60 * 60 * 1000;
+const uploadSessions = new Map();
 const RESOLVED_STREAM_CACHE_TTL_MS = 20 * 60 * 1000;
 const RESOLVED_STREAM_CACHE_EPHEMERAL_TTL_MS = 12 * 60 * 60 * 1000;
 const RESOLVED_STREAM_CACHE_EPHEMERAL_REVALIDATE_MS = 90 * 1000;
@@ -410,7 +432,13 @@ function toLocalPath(pathname) {
     return null;
   }
 
-  const requested = decoded === "/" ? "/index.html" : decoded;
+  let requested = decoded === "/" ? "/index.html" : decoded;
+  if (requested.length > 1 && requested.endsWith("/")) {
+    requested = requested.slice(0, -1);
+  }
+  if (!basename(requested).includes(".")) {
+    requested = `${requested}.html`;
+  }
   const normalized = normalize(requested).replace(/^(\.\.(\/|\\|$))+/, "");
   const trimmed = normalized.startsWith("/") ? normalized.slice(1) : normalized;
   const filePath = join(ROOT_DIR, trimmed);
@@ -420,6 +448,1103 @@ function toLocalPath(pathname) {
   }
 
   return filePath;
+}
+
+function createEmptyLocalLibrary() {
+  return {
+    movies: [],
+    series: [],
+  };
+}
+
+function normalizeWhitespace(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function slugify(value, fallback = "title") {
+  const base = normalizeWhitespace(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || fallback;
+}
+
+function normalizeYear(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}$/.test(text)) {
+    return "";
+  }
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric) || numeric < 1888 || numeric > 2100) {
+    return "";
+  }
+  return text;
+}
+
+function normalizeUploadContentType(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  return normalized === "episode" ? "episode" : "movie";
+}
+
+function normalizeUploadEpisodeOrdinal(value, fallback = 1) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(999, Math.floor(parsed)));
+}
+
+function normalizeLocalMovieEntry(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const title = normalizeWhitespace(entry.title || "");
+  const src = normalizeWhitespace(entry.src || "");
+  if (!title || !src) {
+    return null;
+  }
+  return {
+    id: normalizeWhitespace(entry.id || slugify(title)),
+    title,
+    tmdbId: /^\d+$/.test(String(entry.tmdbId || "").trim())
+      ? String(entry.tmdbId).trim()
+      : "",
+    year: normalizeYear(entry.year || ""),
+    src,
+    thumb: normalizeWhitespace(entry.thumb || "assets/images/thumbnail.jpg"),
+    description: normalizeWhitespace(entry.description || ""),
+    uploadedAt: Number.isFinite(Number(entry.uploadedAt))
+      ? Math.floor(Number(entry.uploadedAt))
+      : Date.now(),
+  };
+}
+
+function normalizeLocalSeriesEpisodeEntry(entry, fallbackIndex = 0) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const src = normalizeWhitespace(entry.src || "");
+  if (!src) {
+    return null;
+  }
+  const episodeNumber = normalizeUploadEpisodeOrdinal(
+    entry.episodeNumber || fallbackIndex + 1,
+    fallbackIndex + 1,
+  );
+  return {
+    title: normalizeWhitespace(entry.title || `Episode ${episodeNumber}`),
+    description: normalizeWhitespace(entry.description || ""),
+    thumb: normalizeWhitespace(entry.thumb || "assets/images/thumbnail.jpg"),
+    src,
+    seasonNumber: normalizeUploadEpisodeOrdinal(entry.seasonNumber || 1, 1),
+    episodeNumber,
+    uploadedAt: Number.isFinite(Number(entry.uploadedAt))
+      ? Math.floor(Number(entry.uploadedAt))
+      : Date.now(),
+  };
+}
+
+function normalizeLocalSeriesEntry(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const id = slugify(entry.id || entry.title || "");
+  const title = normalizeWhitespace(entry.title || "");
+  if (!id || !title) {
+    return null;
+  }
+  const episodes = Array.isArray(entry.episodes)
+    ? entry.episodes
+        .map((episode, index) =>
+          normalizeLocalSeriesEpisodeEntry(episode, index),
+        )
+        .filter(Boolean)
+    : [];
+  if (!episodes.length) {
+    return null;
+  }
+
+  episodes.sort((left, right) => {
+    const seasonDelta = left.seasonNumber - right.seasonNumber;
+    if (seasonDelta !== 0) {
+      return seasonDelta;
+    }
+    return left.episodeNumber - right.episodeNumber;
+  });
+
+  return {
+    id,
+    title,
+    tmdbId: /^\d+$/.test(String(entry.tmdbId || "").trim())
+      ? String(entry.tmdbId).trim()
+      : "",
+    year: normalizeYear(entry.year || ""),
+    preferredContainer: "mp4",
+    requiresLocalEpisodeSources: true,
+    episodes,
+  };
+}
+
+function normalizeLocalLibrary(rawValue) {
+  const source =
+    rawValue && typeof rawValue === "object"
+      ? rawValue
+      : createEmptyLocalLibrary();
+  const movies = Array.isArray(source.movies)
+    ? source.movies
+        .map((entry) => normalizeLocalMovieEntry(entry))
+        .filter(Boolean)
+    : [];
+  const series = Array.isArray(source.series)
+    ? source.series
+        .map((entry) => normalizeLocalSeriesEntry(entry))
+        .filter(Boolean)
+    : [];
+  return { movies, series };
+}
+
+async function readLocalLibrary() {
+  try {
+    const raw = await Bun.file(LOCAL_LIBRARY_PATH).text();
+    return normalizeLocalLibrary(JSON.parse(raw));
+  } catch {
+    return createEmptyLocalLibrary();
+  }
+}
+
+async function writeLocalLibrary(value) {
+  const normalized = normalizeLocalLibrary(value);
+  await Bun.write(
+    LOCAL_LIBRARY_PATH,
+    `${JSON.stringify(normalized, null, 2)}\n`,
+  );
+  return normalized;
+}
+
+function stripKnownVideoExtensions(value) {
+  const normalized = String(value || "").trim();
+  return normalized.replace(/\.(mp4|mkv)$/i, "");
+}
+
+function buildAssetVideoSource(fileName) {
+  const safeName = String(fileName || "").trim();
+  return `assets/videos/${safeName}`;
+}
+
+function stripFileExtension(value) {
+  return String(value || "").replace(/\.[^./\\]+$/, "");
+}
+
+function titleFromFilenameToken(token) {
+  return normalizeWhitespace(
+    String(token || "")
+      .replace(/[._]+/g, " ")
+      .replace(
+        /\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|web[- ]?dl|webrip|bluray|brrip|dvdrip|aac|ac3|ddp|proper|repack)\b/gi,
+        " ",
+      )
+      .replace(/\s+/g, " "),
+  );
+}
+
+function inferUploadMetadataFromFilenameHeuristic(fileName) {
+  const rawBase = stripFileExtension(String(fileName || "").trim());
+  const cleaned = normalizeWhitespace(rawBase);
+  const episodeMatch =
+    /\bS(\d{1,2})E(\d{1,3})\b/i.exec(rawBase) ||
+    /\b(\d{1,2})x(\d{1,3})\b/i.exec(rawBase);
+  const yearMatch = /\b(19\d{2}|20\d{2})\b/.exec(rawBase);
+  const year = normalizeYear(yearMatch?.[1] || "");
+
+  if (episodeMatch) {
+    const seasonNumber = normalizeUploadEpisodeOrdinal(episodeMatch[1], 1);
+    const episodeNumber = normalizeUploadEpisodeOrdinal(episodeMatch[2], 1);
+    const leftSide = rawBase.slice(0, Math.max(0, episodeMatch.index || 0));
+    const seriesTitle =
+      titleFromFilenameToken(leftSide) || titleFromFilenameToken(rawBase);
+    return normalizeInferredUploadMetadata({
+      contentType: "episode",
+      title: seriesTitle,
+      seriesTitle,
+      seasonNumber,
+      episodeNumber,
+      year,
+      confidence: 0.6,
+      reason: "Heuristic SxxExx filename match.",
+    });
+  }
+
+  return normalizeInferredUploadMetadata({
+    contentType: "movie",
+    title: titleFromFilenameToken(rawBase) || cleaned,
+    year,
+    confidence: 0.4,
+    reason: "Heuristic filename inference.",
+  });
+}
+
+function extractEpisodePatternFromFilename(fileName) {
+  const rawBase = stripFileExtension(String(fileName || "").trim());
+  if (!rawBase) {
+    return null;
+  }
+  const match =
+    /\bS(\d{1,2})E(\d{1,3})\b/i.exec(rawBase) ||
+    /\b(\d{1,2})x(\d{1,3})\b/i.exec(rawBase);
+  if (!match) {
+    return null;
+  }
+  const seasonNumber = normalizeUploadEpisodeOrdinal(match[1], 1);
+  const episodeNumber = normalizeUploadEpisodeOrdinal(match[2], 1);
+  const leftSide = rawBase.slice(0, Math.max(0, match.index || 0));
+  const seriesTitle =
+    titleFromFilenameToken(leftSide) || titleFromFilenameToken(rawBase);
+  return {
+    seriesTitle,
+    seasonNumber,
+    episodeNumber,
+  };
+}
+
+function extractSourceFilename(sourcePath) {
+  const raw = String(sourcePath || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const withoutQuery = raw.split("?")[0] || "";
+  return basename(withoutQuery);
+}
+
+async function convertMkvToMp4Lossless(inputPath, outputPath) {
+  await runProcessAndCapture(
+    [
+      "ffmpeg",
+      "-hide_banner",
+      "-y",
+      "-i",
+      inputPath,
+      "-map",
+      "0",
+      "-c",
+      "copy",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ],
+    { timeoutMs: 2 * 60 * 60 * 1000, binary: false },
+  );
+}
+
+function normalizeInferredUploadMetadata(value = {}) {
+  const contentType = normalizeUploadContentType(value.contentType);
+  const inferred = {
+    contentType,
+    confidence: Number.isFinite(Number(value.confidence))
+      ? Math.max(0, Math.min(1, Number(value.confidence)))
+      : 0,
+    title: normalizeWhitespace(value.title || ""),
+    year: normalizeYear(value.year || ""),
+    seriesTitle: "",
+    seasonNumber: 1,
+    episodeNumber: 1,
+    episodeTitle: "",
+    tmdbId: /^\d+$/.test(String(value.tmdbId || "").trim())
+      ? String(value.tmdbId).trim()
+      : "",
+    reason: normalizeWhitespace(value.reason || ""),
+  };
+
+  if (contentType === "episode") {
+    inferred.seriesTitle = normalizeWhitespace(value.seriesTitle || "");
+    inferred.seasonNumber = normalizeUploadEpisodeOrdinal(
+      value.seasonNumber || 1,
+      1,
+    );
+    inferred.episodeNumber = normalizeUploadEpisodeOrdinal(
+      value.episodeNumber || 1,
+      1,
+    );
+    inferred.episodeTitle = normalizeWhitespace(value.episodeTitle || "");
+  }
+
+  return inferred;
+}
+
+function tokenizeTmdbTitle(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function scoreTmdbTitleCandidate(candidateTitle, queryTitle) {
+  const candidateTokens = tokenizeTmdbTitle(candidateTitle);
+  const queryTokens = tokenizeTmdbTitle(queryTitle);
+  if (!candidateTokens.length || !queryTokens.length) {
+    return 0;
+  }
+  const candidateSet = new Set(candidateTokens);
+  let overlap = 0;
+  queryTokens.forEach((token) => {
+    if (candidateSet.has(token)) {
+      overlap += 1;
+    }
+  });
+  return overlap / Math.max(1, queryTokens.length);
+}
+
+function chooseBestTmdbResult(results, queryTitle, queryYear = "") {
+  const list = Array.isArray(results) ? results : [];
+  if (!list.length) {
+    return null;
+  }
+  const safeQueryTitle = normalizeWhitespace(queryTitle);
+  const safeQueryYear = normalizeYear(queryYear);
+  let best = null;
+  let bestScore = -1;
+
+  list.forEach((entry) => {
+    const title = normalizeWhitespace(entry?.name || entry?.title || "");
+    if (!title) {
+      return;
+    }
+    let score = scoreTmdbTitleCandidate(title, safeQueryTitle);
+    const candidateDate = String(
+      entry?.first_air_date || entry?.release_date || "",
+    ).trim();
+    const candidateYear = normalizeYear(candidateDate.slice(0, 4));
+    if (safeQueryYear && candidateYear && safeQueryYear === candidateYear) {
+      score += 0.3;
+    }
+    if (title.toLowerCase() === safeQueryTitle.toLowerCase()) {
+      score += 0.2;
+    }
+    if (score > bestScore) {
+      best = entry;
+      bestScore = score;
+    }
+  });
+
+  return best;
+}
+
+async function enrichInferenceWithTmdb(baseInference, fileName = "") {
+  const inferred = normalizeInferredUploadMetadata(baseInference);
+  const episodePattern = extractEpisodePatternFromFilename(fileName);
+  if (episodePattern) {
+    inferred.contentType = "episode";
+    inferred.seriesTitle =
+      normalizeWhitespace(inferred.seriesTitle || inferred.title || "") ||
+      episodePattern.seriesTitle;
+    inferred.seasonNumber = episodePattern.seasonNumber;
+    inferred.episodeNumber = episodePattern.episodeNumber;
+  }
+
+  if (!TMDB_API_KEY) {
+    inferred.reason = `TMDB_API_KEY missing. ${inferred.reason}`.trim();
+    return inferred;
+  }
+
+  try {
+    if (inferred.contentType === "episode") {
+      const seriesQuery =
+        normalizeWhitespace(inferred.seriesTitle || inferred.title || "") ||
+        normalizeWhitespace(stripFileExtension(fileName));
+      if (!seriesQuery) {
+        return inferred;
+      }
+      const tvSearch = await tmdbFetch("/search/tv", {
+        query: seriesQuery,
+        include_adult: "false",
+      });
+      const bestMatch = chooseBestTmdbResult(
+        tvSearch?.results,
+        seriesQuery,
+        inferred.year,
+      );
+      if (!bestMatch?.id) {
+        return inferred;
+      }
+
+      const tmdbId = String(bestMatch.id).trim();
+      const [seriesDetails, episodeDetails] = await Promise.all([
+        tmdbFetch(`/tv/${tmdbId}`).catch(() => null),
+        tmdbFetch(
+          `/tv/${tmdbId}/season/${inferred.seasonNumber}/episode/${inferred.episodeNumber}`,
+        ).catch(() => null),
+      ]);
+
+      const resolvedSeriesTitle = normalizeWhitespace(
+        seriesDetails?.name || bestMatch?.name || seriesQuery,
+      );
+      inferred.tmdbId = tmdbId;
+      inferred.seriesTitle = resolvedSeriesTitle || inferred.seriesTitle;
+      inferred.title = resolvedSeriesTitle || inferred.title;
+      inferred.year =
+        normalizeYear(
+          String(
+            seriesDetails?.first_air_date || bestMatch?.first_air_date || "",
+          ).slice(0, 4),
+        ) || inferred.year;
+      inferred.episodeTitle =
+        normalizeWhitespace(
+          episodeDetails?.name || inferred.episodeTitle || "",
+        ) || inferred.episodeTitle;
+      inferred.confidence = Math.max(inferred.confidence, 0.9);
+      inferred.reason = `TMDB TV match (${tmdbId}). ${inferred.reason}`.trim();
+      return inferred;
+    }
+
+    const movieQuery =
+      normalizeWhitespace(inferred.title || "") ||
+      normalizeWhitespace(stripFileExtension(fileName));
+    if (!movieQuery) {
+      return inferred;
+    }
+    const movieSearch = await tmdbFetch("/search/movie", {
+      query: movieQuery,
+      include_adult: "false",
+    });
+    const bestMatch = chooseBestTmdbResult(
+      movieSearch?.results,
+      movieQuery,
+      inferred.year,
+    );
+    if (!bestMatch?.id) {
+      return inferred;
+    }
+
+    const tmdbId = String(bestMatch.id).trim();
+    const movieDetails = await tmdbFetch(`/movie/${tmdbId}`).catch(() => null);
+    inferred.tmdbId = tmdbId;
+    inferred.title = normalizeWhitespace(
+      movieDetails?.title || bestMatch?.title || movieQuery,
+    );
+    inferred.year =
+      normalizeYear(
+        String(
+          movieDetails?.release_date || bestMatch?.release_date || "",
+        ).slice(0, 4),
+      ) || inferred.year;
+    inferred.confidence = Math.max(inferred.confidence, 0.9);
+    inferred.reason = `TMDB Movie match (${tmdbId}). ${inferred.reason}`.trim();
+    return inferred;
+  } catch {
+    return inferred;
+  }
+}
+
+function extractResponseOutputText(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const part of content) {
+      const text = String(part?.text || part?.value || "").trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return "";
+}
+
+async function readLocalCodexAccessToken() {
+  const authFile = String(CODEX_AUTH_FILE || "").trim();
+  if (!authFile) {
+    return "";
+  }
+  try {
+    const raw = await Bun.file(authFile).text();
+    const parsed = JSON.parse(raw);
+    const token = normalizeWhitespace(
+      parsed?.access_token || parsed?.tokens?.access_token || "",
+    );
+    return token;
+  } catch {
+    return "";
+  }
+}
+
+function extractFirstJsonObject(text) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return "";
+  }
+  if (raw.startsWith("{") && raw.endsWith("}")) {
+    return raw;
+  }
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenceMatch?.[1]) {
+    const fenced = String(fenceMatch[1]).trim();
+    if (fenced.startsWith("{") && fenced.endsWith("}")) {
+      return fenced;
+    }
+  }
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return raw.slice(firstBrace, lastBrace + 1);
+  }
+  return "";
+}
+
+function extractOutputTextFromCodexSse(rawSseText) {
+  const text = String(rawSseText || "");
+  if (!text.trim()) {
+    return "";
+  }
+
+  let deltaText = "";
+  let doneText = "";
+  let completedText = "";
+
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    if (!line.startsWith("data:")) {
+      continue;
+    }
+    const data = line.slice("data:".length).trim();
+    if (!data || data === "[DONE]") {
+      continue;
+    }
+
+    let payload = null;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      continue;
+    }
+
+    const type = String(payload?.type || "").trim();
+    if (type === "response.output_text.delta") {
+      const delta = String(payload?.delta || "");
+      if (delta) {
+        deltaText += delta;
+      }
+      continue;
+    }
+
+    if (type === "response.output_text.done") {
+      const nextDoneText = String(payload?.text || "").trim();
+      if (nextDoneText) {
+        doneText = nextDoneText;
+      }
+      continue;
+    }
+
+    if (type === "response.completed") {
+      const maybeText = extractResponseOutputText(payload?.response);
+      if (maybeText) {
+        completedText = maybeText;
+      }
+    }
+  }
+
+  return completedText || doneText || deltaText;
+}
+
+async function requestCodexResponsesInference(prompt) {
+  const token = await readLocalCodexAccessToken();
+  if (!token) {
+    throw new Error("Codex OAuth access token was not found.");
+  }
+
+  const response = await fetch(CODEX_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: CODEX_MODEL,
+      instructions:
+        "Return only one JSON object with no markdown and no surrounding text.",
+      stream: true,
+      store: false,
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: prompt }],
+        },
+      ],
+    }),
+  });
+  const rawText = await response.text();
+  if (!response.ok) {
+    let message = "";
+    try {
+      const parsed = JSON.parse(rawText);
+      message = normalizeWhitespace(parsed?.error?.message || parsed?.detail);
+    } catch {
+      message = normalizeWhitespace(rawText);
+    }
+    if (!message) {
+      message = `Codex backend request failed (${response.status}).`;
+    }
+    throw new Error(message || "Codex backend request failed.");
+  }
+
+  const contentType = String(response.headers.get("content-type") || "")
+    .trim()
+    .toLowerCase();
+  const looksLikeSse = /^\s*(event:|data:)/i.test(String(rawText || ""));
+  const outputText =
+    contentType.includes("text/event-stream") || looksLikeSse
+      ? extractOutputTextFromCodexSse(rawText)
+      : (() => {
+          try {
+            const payload = JSON.parse(rawText);
+            return extractResponseOutputText(payload);
+          } catch {
+            return "";
+          }
+        })();
+  if (!outputText) {
+    throw new Error("Codex backend returned no textual output.");
+  }
+  return outputText;
+}
+
+async function requestOpenAiResponsesInference(prompt, schema) {
+  if (!OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured.");
+  }
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: OPENAI_RESPONSES_MODEL,
+      input: [
+        {
+          role: "system",
+          content:
+            "You infer movie/episode metadata from filenames and respond in strict JSON.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "upload_filename_metadata",
+          schema,
+          strict: true,
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = normalizeWhitespace(
+      payload?.error?.message ||
+        `OpenAI Responses request failed (${response.status}).`,
+    );
+    throw new Error(message || "OpenAI Responses request failed.");
+  }
+  const outputText = extractResponseOutputText(payload);
+  if (!outputText) {
+    throw new Error("OpenAI Responses returned no textual output.");
+  }
+  return outputText;
+}
+
+async function inferUploadMetadataWithCodex(fileName) {
+  const prompt = `Infer media metadata from this filename only: "${String(fileName || "").trim()}".
+Return JSON with:
+- contentType: "movie" or "episode"
+- title
+- year (4 digits or empty string)
+- seriesTitle (for episode)
+- seasonNumber (for episode)
+- episodeNumber (for episode)
+- episodeTitle (for episode)
+- confidence (0 to 1)
+- reason (short)
+Rules:
+- If SxxExx pattern exists, classify as episode.
+- If uncertain, prefer movie.
+- Keep fields empty instead of guessing hard.`;
+
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      contentType: {
+        type: "string",
+        enum: ["movie", "episode"],
+      },
+      title: { type: "string" },
+      year: { type: "string" },
+      seriesTitle: { type: "string" },
+      seasonNumber: { type: "integer" },
+      episodeNumber: { type: "integer" },
+      episodeTitle: { type: "string" },
+      confidence: { type: "number" },
+      reason: { type: "string" },
+    },
+    required: ["contentType", "title", "confidence", "reason"],
+  };
+  let outputText = "";
+  let sourceUsed = "";
+
+  try {
+    outputText = await requestCodexResponsesInference(prompt);
+    sourceUsed = "Codex OAuth";
+  } catch {
+    try {
+      outputText = await requestOpenAiResponsesInference(prompt, schema);
+      sourceUsed = "OpenAI API";
+    } catch {
+      const fallback = inferUploadMetadataFromFilenameHeuristic(fileName);
+      fallback.reason = `Codex/OpenAI unavailable. ${fallback.reason}`.trim();
+      return enrichInferenceWithTmdb(fallback, fileName);
+    }
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(extractFirstJsonObject(outputText) || outputText);
+  } catch {
+    const fallback = inferUploadMetadataFromFilenameHeuristic(fileName);
+    fallback.reason =
+      `${sourceUsed} returned invalid JSON. ${fallback.reason}`.trim();
+    return enrichInferenceWithTmdb(fallback, fileName);
+  }
+
+  const normalized = normalizeInferredUploadMetadata(parsed);
+  const episodePattern = extractEpisodePatternFromFilename(fileName);
+  if (episodePattern) {
+    normalized.contentType = "episode";
+    normalized.seriesTitle =
+      normalizeWhitespace(normalized.seriesTitle || normalized.title || "") ||
+      episodePattern.seriesTitle;
+    normalized.seasonNumber = episodePattern.seasonNumber;
+    normalized.episodeNumber = episodePattern.episodeNumber;
+  }
+  normalized.reason = `${sourceUsed}. ${normalized.reason || ""}`.trim();
+  return enrichInferenceWithTmdb(normalized, fileName);
+}
+
+function buildUploadMovieId(title) {
+  return `local-movie-${slugify(title, "movie")}`;
+}
+
+function buildUploadSeriesId(value) {
+  return `local-series-${slugify(value, "series")}`;
+}
+
+function buildUniqueMp4Filename(baseLabel) {
+  const safeBase = slugify(stripKnownVideoExtensions(baseLabel), "upload");
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0"),
+  ].join("");
+  const random = Math.random().toString(36).slice(2, 8);
+  return `${safeBase}-${stamp}-${random}.mp4`;
+}
+
+async function ensureUploadDirectories() {
+  await Promise.all([
+    mkdir(VIDEOS_DIR, { recursive: true }),
+    mkdir(UPLOAD_TEMP_DIR, { recursive: true }),
+  ]);
+}
+
+async function removeFileIfPresent(path) {
+  try {
+    await rm(path, { force: true });
+  } catch {
+    // Ignore cleanup failures.
+  }
+}
+
+function buildUploadTempFilename(originalName = "upload.bin") {
+  const base = slugify(stripKnownVideoExtensions(originalName), "upload");
+  const ext = extname(String(originalName || "").trim()).toLowerCase();
+  const safeExt = ext === ".mp4" || ext === ".mkv" ? ext : ".bin";
+  const stamp = Date.now();
+  const random = Math.random().toString(36).slice(2, 8);
+  return `${base}-${stamp}-${random}${safeExt}`;
+}
+
+function sweepUploadSessions() {
+  const now = Date.now();
+  for (const [sessionId, session] of uploadSessions.entries()) {
+    const createdAt = Number(session?.createdAt || 0);
+    if (!createdAt || createdAt + UPLOAD_SESSION_STALE_MS <= now) {
+      const tempPath = String(session?.tempPath || "").trim();
+      if (tempPath) {
+        void removeFileIfPresent(tempPath);
+      }
+      uploadSessions.delete(sessionId);
+    }
+  }
+}
+
+function buildUploadMetadataFromObject(payload = {}) {
+  return {
+    contentType: String(payload?.contentType || "movie")
+      .trim()
+      .toLowerCase(),
+    title: normalizeWhitespace(payload?.title || ""),
+    year: normalizeYear(payload?.year || ""),
+    description: normalizeWhitespace(payload?.description || ""),
+    thumb: normalizeWhitespace(payload?.thumb || "assets/images/thumbnail.jpg"),
+    tmdbId: String(payload?.tmdbId || "")
+      .trim()
+      .replace(/[^\d]/g, ""),
+    seasonNumber: normalizeUploadEpisodeOrdinal(payload?.seasonNumber || 1, 1),
+    episodeNumber: normalizeUploadEpisodeOrdinal(
+      payload?.episodeNumber || 1,
+      1,
+    ),
+    episodeTitle: normalizeWhitespace(payload?.episodeTitle || ""),
+    seriesTitle: normalizeWhitespace(payload?.seriesTitle || ""),
+    seriesId: normalizeWhitespace(payload?.seriesId || ""),
+  };
+}
+
+async function processUploadedMediaIntoLibrary({
+  inputPath,
+  originalName,
+  metadata,
+}) {
+  const sourcePathInput = String(inputPath || "").trim();
+  const sourceName = String(originalName || "upload").trim() || "upload";
+  const detectedExt = extname(sourceName).toLowerCase();
+  if (!sourcePathInput) {
+    throw new Error("Missing input path for upload processing.");
+  }
+  if (detectedExt !== ".mp4" && detectedExt !== ".mkv") {
+    throw new Error("Only .mp4 and .mkv files are supported.");
+  }
+
+  const contentType = String(metadata?.contentType || "movie")
+    .trim()
+    .toLowerCase();
+  if (contentType !== "movie" && contentType !== "episode") {
+    throw new Error("Invalid contentType. Use movie or episode.");
+  }
+
+  const movieTitle =
+    metadata?.title ||
+    normalizeWhitespace(stripKnownVideoExtensions(sourceName));
+  const year = normalizeYear(metadata?.year || "");
+  const description = normalizeWhitespace(metadata?.description || "");
+  const thumb = normalizeWhitespace(
+    metadata?.thumb || "assets/images/thumbnail.jpg",
+  );
+  const tmdbId = String(metadata?.tmdbId || "")
+    .trim()
+    .replace(/[^\d]/g, "");
+  const seasonNumber = normalizeUploadEpisodeOrdinal(
+    metadata?.seasonNumber || 1,
+    1,
+  );
+  const episodeNumber = normalizeUploadEpisodeOrdinal(
+    metadata?.episodeNumber || 1,
+    1,
+  );
+  const episodeTitle =
+    normalizeWhitespace(metadata?.episodeTitle || "") ||
+    `Episode ${episodeNumber}`;
+  const seriesTitle = normalizeWhitespace(metadata?.seriesTitle || "");
+  const rawSeriesId = normalizeWhitespace(metadata?.seriesId || "");
+  const seriesId = rawSeriesId || seriesTitle || movieTitle;
+
+  await ensureUploadDirectories();
+  const uploadBaseName = contentType === "movie" ? movieTitle : episodeTitle;
+  const outputFileName = buildUniqueMp4Filename(uploadBaseName || sourceName);
+  const outputPath = join(VIDEOS_DIR, outputFileName);
+  let convertedFromMkv = false;
+
+  try {
+    if (detectedExt === ".mp4") {
+      await rename(sourcePathInput, outputPath);
+    } else {
+      convertedFromMkv = true;
+      await convertMkvToMp4Lossless(sourcePathInput, outputPath);
+      await removeFileIfPresent(sourcePathInput);
+    }
+  } catch (error) {
+    await removeFileIfPresent(sourcePathInput);
+    await removeFileIfPresent(outputPath);
+    throw error;
+  }
+
+  const sourcePath = buildAssetVideoSource(outputFileName);
+  const library = await readLocalLibrary();
+
+  if (contentType === "movie") {
+    const entry = normalizeLocalMovieEntry({
+      id: buildUploadMovieId(movieTitle),
+      title: movieTitle || "Untitled Movie",
+      tmdbId,
+      year,
+      src: sourcePath,
+      thumb,
+      description,
+      uploadedAt: Date.now(),
+    });
+    if (!entry) {
+      await removeFileIfPresent(outputPath);
+      throw new Error("Unable to build movie metadata.");
+    }
+
+    const withoutSameSrc = library.movies.filter(
+      (candidate) => String(candidate?.src || "").trim() !== entry.src,
+    );
+    withoutSameSrc.unshift(entry);
+    library.movies = withoutSameSrc;
+    await writeLocalLibrary(library);
+    return {
+      ok: true,
+      contentType: "movie",
+      movie: entry,
+      convertedFromMkv,
+    };
+  }
+
+  const safeSeriesTitle = seriesTitle || "Untitled Series";
+  const normalizedSeriesId = buildUploadSeriesId(seriesId || safeSeriesTitle);
+  const nextSeries = normalizeLocalSeriesEntry({
+    id: normalizedSeriesId,
+    title: safeSeriesTitle,
+    tmdbId,
+    year,
+    episodes: [],
+  });
+  const seriesRecord = nextSeries || {
+    id: normalizedSeriesId,
+    title: safeSeriesTitle,
+    tmdbId: /^\d+$/.test(tmdbId) ? tmdbId : "",
+    year,
+    preferredContainer: "mp4",
+    requiresLocalEpisodeSources: true,
+    episodes: [],
+  };
+
+  const episodeEntry = normalizeLocalSeriesEpisodeEntry(
+    {
+      title: episodeTitle,
+      description,
+      thumb,
+      src: sourcePath,
+      seasonNumber,
+      episodeNumber,
+      uploadedAt: Date.now(),
+    },
+    episodeNumber - 1,
+  );
+  if (!episodeEntry) {
+    await removeFileIfPresent(outputPath);
+    throw new Error("Unable to build episode metadata.");
+  }
+
+  const seriesList = Array.isArray(library.series) ? [...library.series] : [];
+  const existingIndex = seriesList.findIndex(
+    (entry) =>
+      String(entry?.id || "")
+        .trim()
+        .toLowerCase() === normalizedSeriesId.toLowerCase(),
+  );
+  const targetSeries =
+    existingIndex >= 0
+      ? seriesList[existingIndex]
+      : {
+          id: normalizedSeriesId,
+          title: safeSeriesTitle,
+          tmdbId: seriesRecord.tmdbId || "",
+          year: seriesRecord.year || "",
+          preferredContainer: "mp4",
+          requiresLocalEpisodeSources: true,
+          episodes: [],
+        };
+  targetSeries.title = normalizeWhitespace(
+    targetSeries.title || safeSeriesTitle,
+  );
+  targetSeries.tmdbId =
+    /^\d+$/.test(String(targetSeries.tmdbId || "").trim()) &&
+    String(targetSeries.tmdbId || "").trim()
+      ? String(targetSeries.tmdbId || "").trim()
+      : seriesRecord.tmdbId || "";
+  targetSeries.year = normalizeYear(targetSeries.year || year);
+  targetSeries.preferredContainer = "mp4";
+  targetSeries.requiresLocalEpisodeSources = true;
+
+  const baseEpisodes = Array.isArray(targetSeries.episodes)
+    ? targetSeries.episodes
+    : [];
+  const filteredEpisodes = baseEpisodes.filter((entry) => {
+    const safeSeason = normalizeUploadEpisodeOrdinal(
+      entry?.seasonNumber || 1,
+      1,
+    );
+    const safeEpisode = normalizeUploadEpisodeOrdinal(
+      entry?.episodeNumber || 1,
+      1,
+    );
+    return !(safeSeason === seasonNumber && safeEpisode === episodeNumber);
+  });
+  filteredEpisodes.push(episodeEntry);
+  filteredEpisodes.sort((left, right) => {
+    const seasonDelta =
+      normalizeUploadEpisodeOrdinal(left?.seasonNumber || 1, 1) -
+      normalizeUploadEpisodeOrdinal(right?.seasonNumber || 1, 1);
+    if (seasonDelta !== 0) {
+      return seasonDelta;
+    }
+    return (
+      normalizeUploadEpisodeOrdinal(left?.episodeNumber || 1, 1) -
+      normalizeUploadEpisodeOrdinal(right?.episodeNumber || 1, 1)
+    );
+  });
+  targetSeries.episodes = filteredEpisodes
+    .map((entry, index) => normalizeLocalSeriesEpisodeEntry(entry, index))
+    .filter(Boolean);
+
+  if (existingIndex >= 0) {
+    seriesList[existingIndex] = targetSeries;
+  } else {
+    seriesList.unshift(targetSeries);
+  }
+  library.series = seriesList;
+  await writeLocalLibrary(library);
+
+  return {
+    ok: true,
+    contentType: "episode",
+    series: targetSeries,
+    episode: episodeEntry,
+    convertedFromMkv,
+  };
 }
 
 function isHttpUrl(value) {
@@ -8545,6 +9670,7 @@ async function resolveTmdbMovieViaRealDebrid(tmdbMovieId, context = {}) {
 }
 
 async function handleApi(url, request) {
+  sweepUploadSessions();
   if (url.pathname === "/api/debug/cache") {
     if (url.searchParams.get("clear") === "1") {
       tmdbResponseCache.clear();
@@ -8572,6 +9698,7 @@ async function handleApi(url, request) {
       playbackSessionsEnabled: PLAYBACK_SESSIONS_ENABLED,
       autoAudioSyncEnabled: AUTO_AUDIO_SYNC_ENABLED,
       remuxVideoMode: REMUX_VIDEO_MODE,
+      maxUploadBytes: MAX_UPLOAD_BYTES,
       hlsHwaccel: {
         requested: HLS_HWACCEL_MODE,
         effective: ffmpeg.effectiveHlsHwaccel,
@@ -8584,6 +9711,241 @@ async function handleApi(url, request) {
         notes: nativePlayer.notes,
       },
     });
+  }
+
+  if (url.pathname === "/api/library") {
+    if (request.method !== "GET") {
+      return json({ error: "Method not allowed. Use GET." }, 405);
+    }
+    return json(await readLocalLibrary());
+  }
+
+  if (url.pathname === "/api/upload/infer") {
+    if (request.method !== "POST") {
+      return json({ error: "Method not allowed. Use POST." }, 405);
+    }
+    let payload = null;
+    try {
+      payload = await request.json();
+    } catch {
+      return json({ error: "Invalid JSON body." }, 400);
+    }
+
+    const fileName = normalizeWhitespace(payload?.fileName || "");
+    if (!fileName) {
+      return json({ error: "Missing fileName." }, 400);
+    }
+
+    try {
+      const inferred = await inferUploadMetadataWithCodex(fileName);
+      return json({
+        ok: true,
+        inferred,
+      });
+    } catch (error) {
+      const inferred = inferUploadMetadataFromFilenameHeuristic(fileName);
+      inferred.reason =
+        `Responses API failed; used heuristic fallback. ${inferred.reason}`.trim();
+      return json({
+        ok: true,
+        inferred,
+        warning:
+          error instanceof Error ? error.message : "Inference fallback used.",
+      });
+    }
+  }
+
+  if (url.pathname === "/api/upload") {
+    if (request.method !== "POST") {
+      return json({ error: "Method not allowed. Use POST." }, 405);
+    }
+
+    const ffmpeg = await getFfmpegCapabilities();
+    if (!ffmpeg.ffmpegAvailable) {
+      return json(
+        {
+          error:
+            "ffmpeg is required for uploads and container conversion but is unavailable on this machine.",
+        },
+        500,
+      );
+    }
+
+    let formData = null;
+    try {
+      formData = await request.formData();
+    } catch {
+      return json({ error: "Invalid multipart form payload." }, 400);
+    }
+
+    const file = formData.get("file");
+    if (!(file instanceof File)) {
+      return json({ error: "Missing file upload." }, 400);
+    }
+    if (file.size <= 0) {
+      return json({ error: "Uploaded file is empty." }, 400);
+    }
+
+    const originalName = String(file.name || "upload").trim() || "upload";
+    const detectedExt = extname(originalName).toLowerCase();
+    if (detectedExt !== ".mp4" && detectedExt !== ".mkv") {
+      return json({ error: "Only .mp4 and .mkv files are supported." }, 400);
+    }
+    await ensureUploadDirectories();
+    const tempInputPath = join(
+      UPLOAD_TEMP_DIR,
+      buildUploadTempFilename(originalName),
+    );
+    try {
+      await Bun.write(tempInputPath, file);
+      const metadata = buildUploadMetadataFromObject(
+        Object.fromEntries(formData.entries()),
+      );
+      return json(
+        await processUploadedMediaIntoLibrary({
+          inputPath: tempInputPath,
+          originalName,
+          metadata,
+        }),
+      );
+    } catch (error) {
+      await removeFileIfPresent(tempInputPath);
+      const message =
+        error instanceof Error ? error.message : "Upload processing failed.";
+      return json({ error: message }, 500);
+    }
+  }
+
+  if (url.pathname === "/api/upload/session/start") {
+    if (request.method !== "POST") {
+      return json({ error: "Method not allowed. Use POST." }, 405);
+    }
+    let payload = null;
+    try {
+      payload = await request.json();
+    } catch {
+      return json({ error: "Invalid JSON body." }, 400);
+    }
+
+    const fileName = normalizeWhitespace(payload?.fileName || "");
+    if (!fileName) {
+      return json({ error: "Missing fileName." }, 400);
+    }
+    const detectedExt = extname(fileName).toLowerCase();
+    if (detectedExt !== ".mp4" && detectedExt !== ".mkv") {
+      return json({ error: "Only .mp4 and .mkv files are supported." }, 400);
+    }
+
+    const ffmpeg = await getFfmpegCapabilities();
+    if (!ffmpeg.ffmpegAvailable) {
+      return json(
+        {
+          error:
+            "ffmpeg is required for uploads and container conversion but is unavailable on this machine.",
+        },
+        500,
+      );
+    }
+
+    await ensureUploadDirectories();
+    const sessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const tempPath = join(UPLOAD_TEMP_DIR, buildUploadTempFilename(fileName));
+    uploadSessions.set(sessionId, {
+      id: sessionId,
+      tempPath,
+      fileName,
+      metadata: buildUploadMetadataFromObject(payload),
+      receivedBytes: 0,
+      createdAt: Date.now(),
+    });
+
+    return json({
+      ok: true,
+      sessionId,
+    });
+  }
+
+  if (url.pathname === "/api/upload/session/chunk") {
+    if (request.method !== "POST") {
+      return json({ error: "Method not allowed. Use POST." }, 405);
+    }
+    const sessionId = String(url.searchParams.get("sessionId") || "").trim();
+    if (!sessionId) {
+      return json({ error: "Missing sessionId." }, 400);
+    }
+    const session = uploadSessions.get(sessionId);
+    if (!session) {
+      return json({ error: "Upload session not found." }, 404);
+    }
+    let chunkBytes = null;
+    try {
+      const buffer = await request.arrayBuffer();
+      chunkBytes = new Uint8Array(buffer);
+    } catch {
+      return json({ error: "Invalid chunk payload." }, 400);
+    }
+    if (!chunkBytes || chunkBytes.length === 0) {
+      return json({ error: "Empty chunk payload." }, 400);
+    }
+    try {
+      await appendFile(session.tempPath, chunkBytes);
+      session.receivedBytes += chunkBytes.length;
+      return json({ ok: true, receivedBytes: session.receivedBytes });
+    } catch (error) {
+      return json(
+        {
+          error:
+            error instanceof Error ? error.message : "Failed to append chunk.",
+        },
+        500,
+      );
+    }
+  }
+
+  if (url.pathname === "/api/upload/session/finish") {
+    if (request.method !== "POST") {
+      return json({ error: "Method not allowed. Use POST." }, 405);
+    }
+    let payload = null;
+    try {
+      payload = await request.json();
+    } catch {
+      return json({ error: "Invalid JSON body." }, 400);
+    }
+    const sessionId = String(payload?.sessionId || "").trim();
+    if (!sessionId) {
+      return json({ error: "Missing sessionId." }, 400);
+    }
+    const session = uploadSessions.get(sessionId);
+    if (!session) {
+      return json({ error: "Upload session not found." }, 404);
+    }
+    uploadSessions.delete(sessionId);
+    try {
+      if (payload && typeof payload === "object") {
+        session.metadata = buildUploadMetadataFromObject({
+          ...session.metadata,
+          ...payload,
+        });
+      }
+      const result = await processUploadedMediaIntoLibrary({
+        inputPath: session.tempPath,
+        originalName: session.fileName,
+        metadata: session.metadata,
+      });
+      return json(result);
+    } catch (error) {
+      await removeFileIfPresent(session.tempPath);
+      return json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to finalize upload session.",
+        },
+        500,
+      );
+    }
   }
 
   if (url.pathname === "/api/health") {
@@ -9353,6 +10715,7 @@ const server = Bun.serve({
   hostname: HOST,
   port: PORT,
   idleTimeout: SERVER_IDLE_TIMEOUT_SECONDS,
+  maxRequestBodySize: MAX_UPLOAD_BYTES,
   async fetch(request) {
     const url = new URL(request.url);
 
