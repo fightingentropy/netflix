@@ -432,10 +432,13 @@ const hasSeriesEpisodeControls =
   hasRequestedEpisodeIndexParam &&
   Boolean(activeSeries && seriesEpisodes.length > 1);
 const rawSourceParam = String(params.get("src") || "").trim();
+const normalizedRawSourceParam = rawSourceParam.startsWith("assets/")
+  ? `/${rawSourceParam}`
+  : rawSourceParam;
 const thumbParam = String(params.get("thumb") || "").trim();
 const src = isSeriesPlayback
   ? String(activeSeriesEpisode?.src || "").trim()
-  : rawSourceParam;
+  : normalizedRawSourceParam;
 const fallbackSeasonNumber = Number(
   params.get("seasonNumber") || params.get("season") || 1,
 );
@@ -486,6 +489,20 @@ const subtitleLangParam = (params.get("subtitleLang") || "")
   .toLowerCase();
 const sourceHashParam = (params.get("sourceHash") || "").trim().toLowerCase();
 const hasExplicitSource = Boolean(src);
+const isExplicitLocalUploadSource = Boolean(
+  hasExplicitSource &&
+  (() => {
+    const normalizedSource = String(src || "")
+      .trim()
+      .toLowerCase();
+    return (
+      normalizedSource.startsWith("/media/") ||
+      normalizedSource.includes("/media/") ||
+      normalizedSource.startsWith("assets/videos/") ||
+      normalizedSource.includes("/assets/videos/")
+    );
+  })(),
+);
 const isTmdbMoviePlayback = Boolean(
   !hasExplicitSource && tmdbId && mediaType === "movie",
 );
@@ -1033,6 +1050,12 @@ function persistAudioLangPreference(lang) {
 let preferredAudioLang = isRecognizedAudioLang(audioLangParam)
   ? audioLangParam
   : "auto";
+if (
+  isExplicitLocalUploadSource &&
+  (preferredAudioLang === "auto" || !hasAudioLangParam)
+) {
+  preferredAudioLang = "en";
+}
 if (isTmdbMoviePlayback && !hasAudioLangParam) {
   const storedAudioLang = getStoredAudioLangForTmdbMovie(tmdbId);
   if (isRecognizedAudioLang(storedAudioLang)) {
@@ -5178,9 +5201,10 @@ async function initPlaybackSource() {
     tmdbExpectedDurationSeconds = 0;
     hideResolver();
     await resolveExplicitSourceTrackSelection(src);
+    const localUploadSource = isExplicitLocalUploadSource;
     const shouldUseRemux =
       shouldUseSoftwareDecode(src) ||
-      selectedAudioStreamIndex >= 0 ||
+      (!localUploadSource && selectedAudioStreamIndex >= 0) ||
       selectedSubtitleStreamIndex >= 0;
     const nextSource = shouldUseRemux
       ? buildSoftwareDecodeUrl(

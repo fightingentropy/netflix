@@ -11,10 +11,18 @@ const compatibilityActions = document.getElementById("compatibilityActions");
 const transcodeAudioToAacCheckbox = document.getElementById(
   "transcodeAudioToAac",
 );
+const selectedMediaCard = document.getElementById("selectedMediaCard");
+const selectedMediaThumb = document.getElementById("selectedMediaThumb");
+const selectedMediaName = document.getElementById("selectedMediaName");
+const selectedMediaMeta = document.getElementById("selectedMediaMeta");
+const selectedMediaPlan = document.getElementById("selectedMediaPlan");
+const changeFileButton = document.getElementById("changeFileButton");
+const processingTimeline = document.getElementById("processingTimeline");
 
 let selectedFile = null;
 let pendingCompatibilityWarning = "";
 let pendingCanOfferAudioTranscode = false;
+let selectedPreviewRequestVersion = 0;
 
 function formatBytes(value) {
   const bytes = Number(value) || 0;
@@ -27,6 +35,35 @@ function formatBytes(value) {
     unitIndex += 1;
   }
   return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function formatDuration(seconds) {
+  const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const remainingSeconds = safeSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  }
+  return `${minutes}m ${String(remainingSeconds).padStart(2, "0")}s`;
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function setDropzoneState(hasFile) {
+  if (dropZone) {
+    dropZone.hidden = Boolean(hasFile);
+  }
+  if (selectedMediaCard) {
+    selectedMediaCard.hidden = !hasFile;
+  }
 }
 
 function setUploadProgress(uploadedBytes, totalBytes) {
@@ -128,6 +165,226 @@ function normalizeFileExtension(name) {
   return "";
 }
 
+function getTranscodeAudioSetting() {
+  if (!(transcodeAudioToAacCheckbox instanceof HTMLInputElement)) {
+    return true;
+  }
+  if (pendingCanOfferAudioTranscode) {
+    return transcodeAudioToAacCheckbox.checked;
+  }
+  return true;
+}
+
+function buildSelectedFilePlan(file) {
+  const ext = normalizeFileExtension(file?.name || "");
+  const steps = [];
+  if (ext === ".mkv") {
+    steps.push("MKV will be remuxed to MP4 during processing.");
+  } else {
+    steps.push("MP4 container will be kept.");
+  }
+  steps.push("Codec compatibility will be checked after upload.");
+  if (getTranscodeAudioSetting()) {
+    steps.push(
+      "If audio codec is unsupported in Chrome, audio will transcode to AAC.",
+    );
+  } else {
+    steps.push("Audio transcode is disabled for this upload.");
+  }
+  return steps.join(" ");
+}
+
+function updateSelectedFilePlan() {
+  if (!selectedMediaPlan || !(selectedFile instanceof File)) {
+    return;
+  }
+  selectedMediaPlan.textContent = buildSelectedFilePlan(selectedFile);
+}
+
+function renderProcessingTimeline(steps = []) {
+  if (!processingTimeline) {
+    return;
+  }
+  const list = Array.isArray(steps) ? steps : [];
+  processingTimeline.hidden = list.length === 0;
+  processingTimeline.innerHTML = list
+    .map((step) => {
+      const state = String(step?.state || "pending");
+      const text = escapeHtml(step?.text || "");
+      return `<div class="processing-step" data-state="${escapeHtml(state)}">${text}</div>`;
+    })
+    .join("");
+}
+
+function renderIdleProcessingTimeline(file) {
+  const ext = normalizeFileExtension(file?.name || "");
+  const willRemux = ext === ".mkv";
+  renderProcessingTimeline([
+    { state: "pending", text: "Step 1: Upload file in chunks." },
+    {
+      state: "pending",
+      text: willRemux
+        ? "Step 2: Remux MKV -> MP4 (video/audio stream copy)."
+        : "Step 2: Validate MP4 and probe codecs.",
+    },
+    {
+      state: "pending",
+      text: getTranscodeAudioSetting()
+        ? "Step 3: If needed, transcode audio to AAC for Chrome playback."
+        : "Step 3: Audio transcode disabled.",
+    },
+  ]);
+}
+
+function resetSelectedMediaCard() {
+  setDropzoneState(false);
+  if (selectedMediaThumb instanceof HTMLImageElement) {
+    selectedMediaThumb.removeAttribute("src");
+  }
+  if (selectedMediaName) {
+    selectedMediaName.textContent = "Selected file";
+  }
+  if (selectedMediaMeta) {
+    selectedMediaMeta.textContent = "File details";
+  }
+  if (selectedMediaPlan) {
+    selectedMediaPlan.textContent = "Processing plan";
+  }
+}
+
+function getObjectUrlImageDataUrl(file, width = 960) {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.src = objectUrl;
+
+    const cleanup = () => {
+      URL.revokeObjectURL(objectUrl);
+      video.removeAttribute("src");
+      video.load();
+    };
+
+    video.onerror = () => {
+      cleanup();
+      reject(new Error("Could not read selected video metadata."));
+    };
+
+    video.onloadedmetadata = async () => {
+      try {
+        const durationSeconds = Number(video.duration) || 0;
+        const videoWidth = Number(video.videoWidth) || 0;
+        const videoHeight = Number(video.videoHeight) || 0;
+        const seekTime =
+          durationSeconds > 2
+            ? Math.max(
+                0,
+                Math.min(durationSeconds - 0.2, durationSeconds * 0.1),
+              )
+            : 0;
+        if (seekTime > 0) {
+          await new Promise((resolveSeek) => {
+            video.onseeked = () => resolveSeek();
+            video.currentTime = seekTime;
+          });
+        }
+        const renderWidth = Math.max(320, Math.min(width, videoWidth || width));
+        const renderHeight = videoHeight
+          ? Math.max(
+              180,
+              Math.round((renderWidth * videoHeight) / Math.max(1, videoWidth)),
+            )
+          : Math.round(renderWidth * (9 / 16));
+        const canvas = document.createElement("canvas");
+        canvas.width = renderWidth;
+        canvas.height = renderHeight;
+        const context = canvas.getContext("2d");
+        if (context) {
+          context.drawImage(video, 0, 0, renderWidth, renderHeight);
+        }
+        const thumbnailDataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        cleanup();
+        resolve({
+          durationSeconds,
+          width: videoWidth,
+          height: videoHeight,
+          thumbnailDataUrl,
+        });
+      } catch (error) {
+        cleanup();
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Could not render thumbnail."),
+        );
+      }
+    };
+  });
+}
+
+async function hydrateSelectedMediaCard(file) {
+  if (!(file instanceof File)) {
+    return;
+  }
+  const requestVersion = ++selectedPreviewRequestVersion;
+  setDropzoneState(true);
+  if (selectedMediaThumb instanceof HTMLImageElement) {
+    selectedMediaThumb.src = "assets/images/thumbnail.jpg";
+  }
+  if (selectedMediaName) {
+    selectedMediaName.textContent = file.name;
+  }
+  if (selectedMediaMeta) {
+    const ext = normalizeFileExtension(file.name)
+      .replace(".", "")
+      .toUpperCase();
+    selectedMediaMeta.textContent = `${ext || "VIDEO"} • ${formatBytes(file.size)} • Reading metadata...`;
+  }
+  updateSelectedFilePlan();
+  renderIdleProcessingTimeline(file);
+
+  try {
+    const preview = await getObjectUrlImageDataUrl(file);
+    if (requestVersion !== selectedPreviewRequestVersion) {
+      return;
+    }
+    const resolutionText =
+      preview.width && preview.height
+        ? `${preview.width}x${preview.height}`
+        : "Unknown resolution";
+    const durationText = preview.durationSeconds
+      ? formatDuration(preview.durationSeconds)
+      : "Unknown duration";
+    const ext = normalizeFileExtension(file.name)
+      .replace(".", "")
+      .toUpperCase();
+    if (selectedMediaMeta) {
+      selectedMediaMeta.textContent = `${ext || "VIDEO"} • ${formatBytes(file.size)} • ${resolutionText} • ${durationText}`;
+    }
+    if (
+      selectedMediaThumb instanceof HTMLImageElement &&
+      preview.thumbnailDataUrl
+    ) {
+      selectedMediaThumb.src = preview.thumbnailDataUrl;
+    }
+  } catch {
+    if (requestVersion !== selectedPreviewRequestVersion) {
+      return;
+    }
+    if (selectedMediaThumb instanceof HTMLImageElement) {
+      selectedMediaThumb.src = "assets/images/thumbnail.jpg";
+    }
+    if (selectedMediaMeta) {
+      const ext = normalizeFileExtension(file.name)
+        .replace(".", "")
+        .toUpperCase();
+      selectedMediaMeta.textContent = `${ext || "VIDEO"} • ${formatBytes(file.size)} • Metadata unavailable`;
+    }
+  }
+}
+
 function updateSubmitState() {
   submitButton.disabled = !(selectedFile instanceof File);
 }
@@ -156,8 +413,11 @@ function selectFile(file) {
   const ext = normalizeFileExtension(file.name);
   if (!ext) {
     selectedFile = null;
+    selectedPreviewRequestVersion += 1;
     dropZone.classList.remove("has-file");
+    resetSelectedMediaCard();
     hideUploadProgress();
+    renderProcessingTimeline([]);
     pendingCompatibilityWarning = "";
     pendingCanOfferAudioTranscode = false;
     updateCompatibilityActions();
@@ -169,6 +429,7 @@ function selectFile(file) {
   selectedFile = file;
   dropZone.classList.add("has-file");
   hideUploadProgress();
+  setDropzoneState(true);
   const compatibilityInfo = detectCompatibilityInfoFromFilename(file.name);
   pendingCompatibilityWarning = compatibilityInfo.warning;
   pendingCanOfferAudioTranscode = compatibilityInfo.canOfferAudioTranscode;
@@ -184,6 +445,7 @@ function selectFile(file) {
     pendingCompatibilityWarning ? "warning" : "",
   );
   updateSubmitState();
+  void hydrateSelectedMediaCard(file);
   void inferAndPopulateMetadata(file);
 }
 
@@ -208,6 +470,17 @@ dropZone?.addEventListener("drop", (event) => {
   selectFile(file);
 });
 
+changeFileButton?.addEventListener("click", () => {
+  fileInput?.click();
+});
+
+transcodeAudioToAacCheckbox?.addEventListener("change", () => {
+  updateSelectedFilePlan();
+  if (selectedFile instanceof File) {
+    renderIdleProcessingTimeline(selectedFile);
+  }
+});
+
 uploadForm?.addEventListener("change", (event) => {
   if (
     event.target instanceof HTMLInputElement &&
@@ -226,6 +499,14 @@ uploadForm?.addEventListener("submit", async (event) => {
 
   submitButton.disabled = true;
   setUploadProgress(0, selectedFile.size);
+  renderProcessingTimeline([
+    { state: "active", text: "Step 1: Uploading file chunks..." },
+    {
+      state: "pending",
+      text: "Step 2: Finalizing container and probing codecs...",
+    },
+    { state: "pending", text: "Step 3: Updating library metadata..." },
+  ]);
   setStatus("Uploading and processing file...", "");
 
   try {
@@ -244,22 +525,72 @@ uploadForm?.addEventListener("submit", async (event) => {
       chromeCompatibility &&
       chromeCompatibility.isLikelyCompatible === false
     ) {
+      renderProcessingTimeline([
+        { state: "done", text: "Step 1: Upload complete." },
+        {
+          state: "done",
+          text: payload?.convertedFromMkv
+            ? "Step 2: MKV remuxed to MP4."
+            : "Step 2: Container finalized.",
+        },
+        {
+          state: payload?.audioTranscodedToAac ? "done" : "error",
+          text: payload?.audioTranscodedToAac
+            ? "Step 3: Audio transcoded to AAC."
+            : "Step 3: Audio remains potentially incompatible.",
+        },
+      ]);
       setStatus(
         `Upload complete${conversionSummary}. Warning: ${compatibilityWarning || "This file is likely not Chrome-compatible (codec/container)."} Refresh Home to see it.`,
         "warning",
       );
     } else if (chromeCompatibility && chromeCompatibility.checked === false) {
+      renderProcessingTimeline([
+        { state: "done", text: "Step 1: Upload complete." },
+        {
+          state: "done",
+          text: payload?.convertedFromMkv
+            ? "Step 2: MKV remuxed to MP4."
+            : "Step 2: Container finalized.",
+        },
+        {
+          state: "pending",
+          text: "Step 3: Compatibility check could not be verified.",
+        },
+      ]);
       setStatus(
         `Upload complete${conversionSummary}. Note: could not verify Chrome compatibility. Refresh Home to see it.`,
         "warning",
       );
     } else {
+      renderProcessingTimeline([
+        { state: "done", text: "Step 1: Upload complete." },
+        {
+          state: "done",
+          text: payload?.convertedFromMkv
+            ? "Step 2: MKV remuxed to MP4."
+            : "Step 2: Container finalized.",
+        },
+        {
+          state: "done",
+          text: payload?.audioTranscodedToAac
+            ? "Step 3: Audio transcoded to AAC for Chrome."
+            : "Step 3: Codec compatibility verified.",
+        },
+      ]);
       setStatus(
         `Upload complete${conversionSummary}. Chrome compatibility looks good. Refresh Home to see it.`,
         "success",
       );
     }
   } catch (error) {
+    renderProcessingTimeline([
+      { state: "done", text: "Step 1: Upload attempt finished." },
+      {
+        state: "error",
+        text: "Step 2: Processing failed before library update.",
+      },
+    ]);
     setStatus(
       error instanceof Error ? error.message : "Upload failed.",
       "error",
@@ -275,10 +606,7 @@ function readUploadMetadataFromForm() {
   const contentType = String(formData.get("contentType") || "movie")
     .trim()
     .toLowerCase();
-  const transcodeAudioToAac =
-    pendingCanOfferAudioTranscode &&
-    transcodeAudioToAacCheckbox instanceof HTMLInputElement &&
-    transcodeAudioToAacCheckbox.checked;
+  const transcodeAudioToAac = getTranscodeAudioSetting();
   const isEpisode = contentType === "episode";
   return {
     contentType,
@@ -297,6 +625,8 @@ function readUploadMetadataFromForm() {
 
 async function uploadViaChunkSession(file) {
   const metadata = readUploadMetadataFromForm();
+  const ext = normalizeFileExtension(file?.name || "");
+  const willRemux = ext === ".mkv";
   const startResponse = await fetch("/api/upload/session/start", {
     method: "POST",
     headers: {
@@ -346,14 +676,47 @@ async function uploadViaChunkSession(file) {
     } else {
       uploadedBytes = Math.min(file.size, offset + chunk.size);
     }
-    setUploadProgress(uploadedBytes, file.size);
-    setStatus(
-      `Uploading... ${Math.round((uploadedBytes / Math.max(1, file.size)) * 100)}%`,
-      "",
+    const uploadPercent = Math.round(
+      (uploadedBytes / Math.max(1, file.size)) * 100,
     );
+    setUploadProgress(uploadedBytes, file.size);
+    renderProcessingTimeline([
+      {
+        state: "active",
+        text: `Step 1: Uploading file chunks... ${uploadPercent}%`,
+      },
+      {
+        state: "pending",
+        text: willRemux
+          ? "Step 2: Remux MKV -> MP4 and probe codecs."
+          : "Step 2: Probe codecs and validate MP4.",
+      },
+      {
+        state: "pending",
+        text: metadata.transcodeAudioToAac
+          ? "Step 3: If needed, transcode audio to AAC."
+          : "Step 3: Audio transcode disabled.",
+      },
+    ]);
+    setStatus(`Uploading... ${uploadPercent}%`, "");
   }
 
   setUploadProgress(file.size, file.size);
+  renderProcessingTimeline([
+    { state: "done", text: "Step 1: Upload complete." },
+    {
+      state: "active",
+      text: willRemux
+        ? "Step 2: Finalizing: remuxing MKV to MP4 and probing codecs..."
+        : "Step 2: Finalizing: validating MP4 and probing codecs...",
+    },
+    {
+      state: "pending",
+      text: metadata.transcodeAudioToAac
+        ? "Step 3: Will transcode audio to AAC if codec is unsupported."
+        : "Step 3: Audio transcode disabled.",
+    },
+  ]);
   setStatus("Upload sent. Finalizing and processing...", "");
 
   const finishResponse = await fetch("/api/upload/session/finish", {
@@ -464,3 +827,5 @@ updateFormForContentType();
 updateSubmitState();
 hideUploadProgress();
 updateCompatibilityActions();
+resetSelectedMediaCard();
+renderProcessingTimeline([]);

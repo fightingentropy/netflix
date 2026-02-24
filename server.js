@@ -769,6 +769,35 @@ async function convertMediaAudioToAacKeepingVideo(inputPath, outputPath) {
   );
 }
 
+async function keepPreferredAudioTrackWithVideoCopy(
+  inputPath,
+  outputPath,
+  preferredAudioStreamIndex,
+) {
+  await runProcessAndCapture(
+    [
+      "ffmpeg",
+      "-hide_banner",
+      "-y",
+      "-i",
+      inputPath,
+      "-map",
+      "0:v",
+      "-map",
+      `0:${Math.floor(Number(preferredAudioStreamIndex) || 0)}?`,
+      "-sn",
+      "-c:v",
+      "copy",
+      "-c:a",
+      "copy",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ],
+    { timeoutMs: 2 * 60 * 60 * 1000, binary: false },
+  );
+}
+
 function normalizeInferredUploadMetadata(value = {}) {
   const contentType = normalizeUploadContentType(value.contentType);
   const inferred = {
@@ -1569,6 +1598,7 @@ async function processUploadedMediaIntoLibrary({
   let outputPath = join(VIDEOS_DIR, outputFileName);
   let convertedFromMkv = false;
   let audioTranscodedToAac = false;
+  let englishAudioEnforced = false;
 
   try {
     if (detectedExt === ".mp4") {
@@ -1610,6 +1640,46 @@ async function processUploadedMediaIntoLibrary({
     }
   }
 
+  try {
+    const postProcessProbe = await probeMediaTracks(sourcePath);
+    const audioTracks = Array.isArray(postProcessProbe?.audioTracks)
+      ? postProcessProbe.audioTracks
+      : [];
+    const englishTrack = audioTracks.find(
+      (track) => normalizeIsoLanguage(track?.language || "") === "en",
+    );
+    const firstTrack = audioTracks[0] || null;
+    const shouldEnforceEnglishTrack =
+      englishTrack &&
+      Number.isInteger(Number(englishTrack.streamIndex)) &&
+      firstTrack &&
+      Number(firstTrack.streamIndex) !== Number(englishTrack.streamIndex);
+    if (shouldEnforceEnglishTrack) {
+      const enFileName = buildUniqueMp4Filename(
+        `${uploadBaseName || sourceName}-en`,
+      );
+      const enPath = join(VIDEOS_DIR, enFileName);
+      try {
+        await keepPreferredAudioTrackWithVideoCopy(
+          outputPath,
+          enPath,
+          englishTrack.streamIndex,
+        );
+        await removeFileIfPresent(outputPath);
+        outputFileName = enFileName;
+        outputPath = enPath;
+        sourcePath = buildAssetVideoSource(outputFileName);
+        chromeCompatibility =
+          await detectChromeCompatibilityForSource(sourcePath);
+        englishAudioEnforced = true;
+      } catch {
+        await removeFileIfPresent(enPath);
+      }
+    }
+  } catch {
+    // Best-effort audio preference enforcement for local uploads.
+  }
+
   const library = await readLocalLibrary();
 
   if (contentType === "movie") {
@@ -1628,11 +1698,35 @@ async function processUploadedMediaIntoLibrary({
       throw new Error("Unable to build movie metadata.");
     }
 
-    const withoutSameSrc = library.movies.filter(
-      (candidate) => String(candidate?.src || "").trim() !== entry.src,
-    );
-    withoutSameSrc.unshift(entry);
-    library.movies = withoutSameSrc;
+    const normalizedEntryTitle = String(entry.title || "")
+      .trim()
+      .toLowerCase();
+    const normalizedEntryYear = String(entry.year || "").trim();
+    const withoutSameMovie = library.movies.filter((candidate) => {
+      const candidateSrc = String(candidate?.src || "").trim();
+      if (candidateSrc === entry.src) {
+        return false;
+      }
+      const candidateTmdbId = String(candidate?.tmdbId || "").trim();
+      if (entry.tmdbId && candidateTmdbId && candidateTmdbId === entry.tmdbId) {
+        return false;
+      }
+      const candidateTitle = String(candidate?.title || "")
+        .trim()
+        .toLowerCase();
+      const candidateYear = String(candidate?.year || "").trim();
+      if (
+        normalizedEntryTitle &&
+        candidateTitle &&
+        candidateTitle === normalizedEntryTitle &&
+        candidateYear === normalizedEntryYear
+      ) {
+        return false;
+      }
+      return true;
+    });
+    withoutSameMovie.unshift(entry);
+    library.movies = withoutSameMovie;
     await writeLocalLibrary(library);
     return {
       ok: true,
@@ -1640,6 +1734,7 @@ async function processUploadedMediaIntoLibrary({
       movie: entry,
       convertedFromMkv,
       audioTranscodedToAac,
+      englishAudioEnforced,
       chromeCompatibility,
     };
   }
@@ -1757,6 +1852,7 @@ async function processUploadedMediaIntoLibrary({
     episode: episodeEntry,
     convertedFromMkv,
     audioTranscodedToAac,
+    englishAudioEnforced,
     chromeCompatibility,
   };
 }
@@ -3638,6 +3734,34 @@ function chooseAudioTrackFromProbe(probe, preferredLang) {
     );
     if (exact) {
       return exact;
+    }
+
+    const languageHintTokensByLang = {
+      en: ["en", "eng", "english"],
+      fr: ["fr", "fra", "fre", "french"],
+      es: ["es", "spa", "spanish", "espanol", "castellano"],
+      de: ["de", "ger", "deu", "german", "deutsch"],
+      it: ["it", "ita", "italian", "italiano"],
+      pt: ["pt", "por", "portuguese", "portugues", "brazilian", "ptbr"],
+    };
+    const preferredTokens = languageHintTokensByLang[normalizedPreferred] || [
+      normalizedPreferred,
+    ];
+    const hinted = audioTracks.find((track) => {
+      const title = String(track?.title || track?.label || "")
+        .trim()
+        .toLowerCase();
+      if (!title) {
+        return false;
+      }
+      const tokens = title
+        .split(/[^a-z0-9]+/g)
+        .map((token) => token.trim())
+        .filter(Boolean);
+      return preferredTokens.some((token) => tokens.includes(token));
+    });
+    if (hinted) {
+      return hinted;
     }
   }
 

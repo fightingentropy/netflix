@@ -1261,9 +1261,32 @@ async function loadPopularTitles() {
           return !HIDDEN_LOCAL_SERIES_TMDB_IDS.has(tmdbId);
         })
       : [];
-    const localMovies = Array.isArray(localLibrary?.movies)
+    const localMoviesRaw = Array.isArray(localLibrary?.movies)
       ? localLibrary.movies
       : [];
+    const localMoviesMap = new Map();
+    localMoviesRaw.forEach((entry) => {
+      const tmdbId = String(entry?.tmdbId || "").trim();
+      const titleKey = normalizeTitleKey(entry?.title || "");
+      const yearKey = String(entry?.year || "").trim();
+      const key = tmdbId || (titleKey ? `${titleKey}|${yearKey}` : "");
+      if (!key) {
+        return;
+      }
+      const existing = localMoviesMap.get(key);
+      const existingUploadedAt = Number(existing?.uploadedAt || 0);
+      const nextUploadedAt = Number(entry?.uploadedAt || 0);
+      if (!existing || nextUploadedAt >= existingUploadedAt) {
+        localMoviesMap.set(key, entry);
+      }
+    });
+    const localMovies = Array.from(localMoviesMap.values()).sort(
+      (left, right) => {
+        const leftUploadedAt = Number(left?.uploadedAt || 0);
+        const rightUploadedAt = Number(right?.uploadedAt || 0);
+        return rightUploadedAt - leftUploadedAt;
+      },
+    );
     localSeries.forEach((item) => {
       cardsToRender.push(buildCardFromLocalSeries(item));
     });
@@ -1533,6 +1556,20 @@ function openPlayerPage({
   seriesId,
   episodeIndex,
 }) {
+  const normalizePlaybackSource = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return "";
+    }
+    if (/^(https?:)?\/\//i.test(raw) || raw.startsWith("/")) {
+      return raw;
+    }
+    if (raw.startsWith("assets/")) {
+      return `/${raw}`;
+    }
+    return raw;
+  };
+  const normalizedSrc = normalizePlaybackSource(src);
   const normalizedMediaType = String(mediaType || "")
     .trim()
     .toLowerCase();
@@ -1553,8 +1590,8 @@ function openPlayerPage({
     params.set("episode", normalizedEpisode);
   }
 
-  if (src) {
-    params.set("src", src);
+  if (normalizedSrc) {
+    params.set("src", normalizedSrc);
   }
   if (thumb) {
     params.set("thumb", thumb);
@@ -1593,17 +1630,19 @@ function openPlayerPage({
     }
   }
 
-  const normalizedSource = String(src || "")
+  const normalizedSource = String(normalizedSrc || "")
     .trim()
     .toLowerCase();
   const isUploadedLocalMedia =
     normalizedSource.startsWith("/media/") ||
-    normalizedSource.includes("/media/");
-  if (src && isUploadedLocalMedia && !params.has("audioLang")) {
+    normalizedSource.includes("/media/") ||
+    normalizedSource.startsWith("assets/videos/") ||
+    normalizedSource.includes("/assets/videos/");
+  if (normalizedSrc && isUploadedLocalMedia && !params.has("audioLang")) {
     params.set("audioLang", "en");
   }
 
-  if (!src && !tmdbId && !normalizedSeriesId) {
+  if (!normalizedSrc && !tmdbId && !normalizedSeriesId) {
     params.set("src", "assets/videos/intro.mp4");
   }
 

@@ -33,6 +33,33 @@
                     <strong>Drag and drop a file here</strong>
                     <span>or click to browse</span>
                 </label>
+                <section id="selectedMediaCard" class="selected-media" hidden>
+                    <div class="selected-media-thumb-wrap">
+                        <img
+                            id="selectedMediaThumb"
+                            class="selected-media-thumb"
+                            alt="Selected video thumbnail"
+                        />
+                    </div>
+                    <div class="selected-media-body">
+                        <h2 id="selectedMediaName" class="selected-media-name">
+                            Selected file
+                        </h2>
+                        <p id="selectedMediaMeta" class="selected-media-meta">
+                            File details
+                        </p>
+                        <p id="selectedMediaPlan" class="selected-media-plan">
+                            Processing plan
+                        </p>
+                        <button
+                            id="changeFileButton"
+                            type="button"
+                            class="change-file-btn"
+                        >
+                            Choose another file
+                        </button>
+                    </div>
+                </section>
 
                 <div
                     id="compatibilityActions"
@@ -163,6 +190,12 @@
                         ></div>
                     </div>
                 </div>
+                <div
+                    id="processingTimeline"
+                    class="processing-timeline"
+                    hidden
+                    aria-live="polite"
+                ></div>
 
                 <p id="status" class="status" aria-live="polite"></p>
             </section>
