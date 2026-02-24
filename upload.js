@@ -23,6 +23,7 @@ let selectedFile = null;
 let pendingCompatibilityWarning = "";
 let pendingCanOfferAudioTranscode = false;
 let selectedPreviewRequestVersion = 0;
+let isProcessingUpload = false;
 
 function formatBytes(value) {
   const bytes = Number(value) || 0;
@@ -386,7 +387,35 @@ async function hydrateSelectedMediaCard(file) {
 }
 
 function updateSubmitState() {
+  if (isProcessingUpload) {
+    submitButton.disabled = true;
+    return;
+  }
   submitButton.disabled = !(selectedFile instanceof File);
+}
+
+function setUploadBusyState(isBusy) {
+  isProcessingUpload = Boolean(isBusy);
+  const controls = uploadForm?.querySelectorAll(
+    "input, textarea, button, select",
+  );
+  controls?.forEach((control) => {
+    if (control instanceof HTMLInputElement && control.type === "hidden") {
+      return;
+    }
+    control.disabled = isProcessingUpload;
+  });
+  if (fileInput instanceof HTMLInputElement) {
+    fileInput.disabled = isProcessingUpload;
+  }
+  if (changeFileButton instanceof HTMLButtonElement) {
+    changeFileButton.disabled = isProcessingUpload;
+  }
+  if (isProcessingUpload) {
+    submitButton.disabled = true;
+  } else {
+    updateSubmitState();
+  }
 }
 
 function getSelectedContentType() {
@@ -497,7 +526,7 @@ uploadForm?.addEventListener("submit", async (event) => {
     return;
   }
 
-  submitButton.disabled = true;
+  setUploadBusyState(true);
   setUploadProgress(0, selectedFile.size);
   renderProcessingTimeline([
     { state: "active", text: "Step 1: Uploading file chunks..." },
@@ -509,6 +538,7 @@ uploadForm?.addEventListener("submit", async (event) => {
   ]);
   setStatus("Uploading and processing file...", "");
 
+  let shouldRedirectHome = false;
   try {
     const payload = await uploadViaChunkSession(selectedFile);
 
@@ -544,6 +574,10 @@ uploadForm?.addEventListener("submit", async (event) => {
         `Upload complete${conversionSummary}. Warning: ${compatibilityWarning || "This file is likely not Chrome-compatible (codec/container)."} Refresh Home to see it.`,
         "warning",
       );
+      shouldRedirectHome = true;
+      window.setTimeout(() => {
+        window.location.href = "/";
+      }, 900);
     } else if (chromeCompatibility && chromeCompatibility.checked === false) {
       renderProcessingTimeline([
         { state: "done", text: "Step 1: Upload complete." },
@@ -562,6 +596,10 @@ uploadForm?.addEventListener("submit", async (event) => {
         `Upload complete${conversionSummary}. Note: could not verify Chrome compatibility. Refresh Home to see it.`,
         "warning",
       );
+      shouldRedirectHome = true;
+      window.setTimeout(() => {
+        window.location.href = "/";
+      }, 900);
     } else {
       renderProcessingTimeline([
         { state: "done", text: "Step 1: Upload complete." },
@@ -582,6 +620,10 @@ uploadForm?.addEventListener("submit", async (event) => {
         `Upload complete${conversionSummary}. Chrome compatibility looks good. Refresh Home to see it.`,
         "success",
       );
+      shouldRedirectHome = true;
+      window.setTimeout(() => {
+        window.location.href = "/";
+      }, 900);
     }
   } catch (error) {
     renderProcessingTimeline([
@@ -596,8 +638,11 @@ uploadForm?.addEventListener("submit", async (event) => {
       "error",
     );
   } finally {
-    hideUploadProgress();
-    updateSubmitState();
+    if (!shouldRedirectHome) {
+      hideUploadProgress();
+      setUploadBusyState(false);
+      updateSubmitState();
+    }
   }
 });
 
