@@ -511,6 +511,9 @@ const isExplicitLocalUploadSource = Boolean(
     return (
       normalizedSource.startsWith("/media/") ||
       normalizedSource.includes("/media/") ||
+      normalizedSource.startsWith("/videos/") ||
+      normalizedSource.startsWith("videos/") ||
+      normalizedSource.includes("/videos/") ||
       normalizedSource.startsWith("assets/videos/") ||
       normalizedSource.includes("/assets/videos/")
     );
@@ -540,6 +543,8 @@ const supportedAudioLangs = new Set([
 const AUDIO_LANG_PREF_KEY_PREFIX = "netflix-audio-lang:movie:";
 const SUBTITLE_LANG_PREF_KEY_PREFIX = "netflix-subtitle-lang:movie:";
 const SUBTITLE_STREAM_PREF_KEY_PREFIX = "netflix-subtitle-stream:movie:";
+const LOCAL_SUBTITLE_LANG_PREF_KEY_PREFIX = "netflix-subtitle-lang:local:";
+const LOCAL_SUBTITLE_STREAM_PREF_KEY_PREFIX = "netflix-subtitle-stream:local:";
 const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
 const SOURCE_MIN_SEEDERS_PREF_KEY = "netflix-source-filter-min-seeders";
 const SOURCE_ALLOWED_FORMATS_PREF_KEY = "netflix-source-filter-allowed-formats";
@@ -937,18 +942,66 @@ function getSubtitleStreamPreferenceStorageKey(movieTmdbId) {
   return `${SUBTITLE_STREAM_PREF_KEY_PREFIX}${String(movieTmdbId || "").trim()}`;
 }
 
-function getStoredSubtitleStreamPreferenceForTmdbMovie(movieTmdbId) {
-  const normalizedTmdbId = String(movieTmdbId || "").trim();
-  if (!normalizedTmdbId) {
+function getLocalSubtitlePreferenceSourceKey() {
+  if (!isExplicitLocalUploadSource) {
+    return "";
+  }
+  if (isSeriesPlayback && activeSeries?.id) {
+    return `series:${String(activeSeries.id).trim().toLowerCase()}:episode:${Math.max(0, Math.floor(Number(seriesEpisodeIndex) || 0))}`;
+  }
+  return String(src || "").trim();
+}
+
+function getLocalSubtitleLangPreferenceStorageKey(sourceKey) {
+  return `${LOCAL_SUBTITLE_LANG_PREF_KEY_PREFIX}${String(sourceKey || "").trim()}`;
+}
+
+function getLocalSubtitleStreamPreferenceStorageKey(sourceKey) {
+  return `${LOCAL_SUBTITLE_STREAM_PREF_KEY_PREFIX}${String(sourceKey || "").trim()}`;
+}
+
+function getSubtitlePreferenceStorageTarget() {
+  if (isTmdbMoviePlayback && tmdbId) {
+    return { scope: "movie", key: String(tmdbId || "").trim() };
+  }
+
+  const localSourceKey = getLocalSubtitlePreferenceSourceKey();
+  if (localSourceKey) {
+    return { scope: "local", key: localSourceKey };
+  }
+
+  return null;
+}
+
+function getSubtitleLangPreferenceStorageKeyForTarget(target) {
+  if (!target?.key) {
+    return "";
+  }
+  return target.scope === "movie"
+    ? getSubtitleLangPreferenceStorageKey(target.key)
+    : getLocalSubtitleLangPreferenceStorageKey(target.key);
+}
+
+function getSubtitleStreamPreferenceStorageKeyForTarget(target) {
+  if (!target?.key) {
+    return "";
+  }
+  return target.scope === "movie"
+    ? getSubtitleStreamPreferenceStorageKey(target.key)
+    : getLocalSubtitleStreamPreferenceStorageKey(target.key);
+}
+
+function getStoredSubtitleStreamPreferenceForTarget(target) {
+  if (!target?.key) {
+    return { mode: "unset", streamIndex: -1 };
+  }
+  const key = getSubtitleStreamPreferenceStorageKeyForTarget(target);
+  if (!key) {
     return { mode: "unset", streamIndex: -1 };
   }
 
   try {
-    const raw = String(
-      localStorage.getItem(
-        getSubtitleStreamPreferenceStorageKey(normalizedTmdbId),
-      ) || "",
-    )
+    const raw = String(localStorage.getItem(key) || "")
       .trim()
       .toLowerCase();
     if (!raw) {
@@ -964,7 +1017,41 @@ function getStoredSubtitleStreamPreferenceForTmdbMovie(movieTmdbId) {
   } catch {
     // Ignore storage access issues.
   }
+
   return { mode: "unset", streamIndex: -1 };
+}
+
+function getStoredSubtitleLangForTarget(target) {
+  if (!target?.key) {
+    return "";
+  }
+  const key = getSubtitleLangPreferenceStorageKeyForTarget(target);
+  if (!key) {
+    return "";
+  }
+
+  try {
+    return normalizeSubtitlePreference(localStorage.getItem(key));
+  } catch {
+    // Ignore storage access issues.
+  }
+  return "";
+}
+
+function getStoredSubtitleStreamPreferenceForTmdbMovie(movieTmdbId) {
+  const normalizedTmdbId = String(movieTmdbId || "").trim();
+  if (!normalizedTmdbId) {
+    return { mode: "unset", streamIndex: -1 };
+  }
+  return getStoredSubtitleStreamPreferenceForTarget({
+    scope: "movie",
+    key: normalizedTmdbId,
+  });
+}
+
+function getStoredSubtitleStreamPreferenceForCurrentPlayback() {
+  const target = getSubtitlePreferenceStorageTarget();
+  return getStoredSubtitleStreamPreferenceForTarget(target);
 }
 
 function getStoredSubtitleLangForTmdbMovie(movieTmdbId) {
@@ -972,26 +1059,28 @@ function getStoredSubtitleLangForTmdbMovie(movieTmdbId) {
   if (!normalizedTmdbId) {
     return "";
   }
+  return getStoredSubtitleLangForTarget({
+    scope: "movie",
+    key: normalizedTmdbId,
+  });
+}
 
-  try {
-    return normalizeSubtitlePreference(
-      localStorage.getItem(
-        getSubtitleLangPreferenceStorageKey(normalizedTmdbId),
-      ),
-    );
-  } catch {
-    // Ignore storage access issues.
-  }
-  return "";
+function getStoredSubtitleLangForCurrentPlayback() {
+  const target = getSubtitlePreferenceStorageTarget();
+  return getStoredSubtitleLangForTarget(target);
 }
 
 function persistSubtitleLangPreference(lang) {
-  if (!isTmdbMoviePlayback || !tmdbId) {
+  const target = getSubtitlePreferenceStorageTarget();
+  if (!target?.key) {
     return;
   }
 
   const normalizedLang = normalizeSubtitlePreference(lang);
-  const key = getSubtitleLangPreferenceStorageKey(tmdbId);
+  const key = getSubtitleLangPreferenceStorageKeyForTarget(target);
+  if (!key) {
+    return;
+  }
   try {
     if (!normalizedLang) {
       localStorage.removeItem(key);
@@ -1004,11 +1093,15 @@ function persistSubtitleLangPreference(lang) {
 }
 
 function persistSubtitleStreamPreference(streamIndex) {
-  if (!isTmdbMoviePlayback || !tmdbId) {
+  const target = getSubtitlePreferenceStorageTarget();
+  if (!target?.key) {
     return;
   }
 
-  const key = getSubtitleStreamPreferenceStorageKey(tmdbId);
+  const key = getSubtitleStreamPreferenceStorageKeyForTarget(target);
+  if (!key) {
+    return;
+  }
   const normalizedStreamIndex = Number.isInteger(Number(streamIndex))
     ? Number(streamIndex)
     : -1;
@@ -1098,11 +1191,11 @@ let preferredAudioSyncMs = 0;
 let preferredNativePlaybackMode = getStoredNativePlaybackMode();
 let preferredRemuxVideoMode = getStoredRemuxVideoMode();
 preferredSubtitleLang = normalizeSubtitlePreference(subtitleLangParam);
-if (isTmdbMoviePlayback && !hasSubtitleLangParam) {
+if ((isTmdbMoviePlayback || isExplicitLocalUploadSource) && !hasSubtitleLangParam) {
   preferredSubtitleLang =
-    getStoredSubtitleLangForTmdbMovie(tmdbId) || preferredSubtitleLang;
+    getStoredSubtitleLangForCurrentPlayback() || preferredSubtitleLang;
 }
-if (isTmdbMoviePlayback && hasSubtitleLangParam) {
+if ((isTmdbMoviePlayback || isExplicitLocalUploadSource) && hasSubtitleLangParam) {
   persistSubtitleLangPreference(preferredSubtitleLang);
 }
 applyPreferredSourceAudioSync(selectedSourceHash);
@@ -2983,12 +3076,16 @@ async function tryNextTmdbSource() {
 }
 
 function applyStoredSubtitleSelectionPreference() {
-  if (!isTmdbMoviePlayback || hasSubtitleLangParam) {
+  if (hasSubtitleLangParam) {
+    return;
+  }
+
+  if (!(isTmdbMoviePlayback || isExplicitLocalUploadSource)) {
     return;
   }
 
   const storedSubtitleStreamPreference =
-    getStoredSubtitleStreamPreferenceForTmdbMovie(tmdbId);
+    getStoredSubtitleStreamPreferenceForCurrentPlayback();
 
   if (storedSubtitleStreamPreference.mode === "off") {
     selectedSubtitleStreamIndex = -1;
@@ -5534,6 +5631,18 @@ async function initPlaybackSource() {
     tmdbExpectedDurationSeconds = 0;
     hideResolver();
     await resolveExplicitSourceTrackSelection(src);
+    const subtitleStreamPreferenceBeforeResolve =
+      getStoredSubtitleStreamPreferenceForCurrentPlayback();
+    applyStoredSubtitleSelectionPreference();
+    persistSubtitleLangPreference(preferredSubtitleLang);
+    if (
+      subtitleStreamPreferenceBeforeResolve.mode !== "unset" ||
+      selectedSubtitleStreamIndex >= 0 ||
+      preferredSubtitleLang === "off"
+    ) {
+      persistSubtitleStreamPreference(selectedSubtitleStreamIndex);
+    }
+    rebuildTrackOptionButtons();
     const localUploadSource = isExplicitLocalUploadSource;
     const selectedSubtitleTrack = getSubtitleTrackByStreamIndex(
       selectedSubtitleStreamIndex,
@@ -5561,6 +5670,7 @@ async function initPlaybackSource() {
       return;
     }
     setVideoSource(nextSource);
+    applySubtitleTrackByStreamIndex(selectedSubtitleStreamIndex);
     await tryPlay();
     return;
   }

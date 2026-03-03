@@ -1697,6 +1697,9 @@ function openPlayerPage({
   const isUploadedLocalMedia =
     normalizedSource.startsWith("/media/") ||
     normalizedSource.includes("/media/") ||
+    normalizedSource.startsWith("/videos/") ||
+    normalizedSource.startsWith("videos/") ||
+    normalizedSource.includes("/videos/") ||
     normalizedSource.startsWith("assets/videos/") ||
     normalizedSource.includes("/assets/videos/");
   if (normalizedSrc && isUploadedLocalMedia && !params.has("audioLang")) {
