@@ -656,8 +656,10 @@ function buildContinueWatchingCard(entry, tmdbDetails = null) {
     tmdbDetails?.poster_path || tmdbDetails?.backdrop_path || "";
   const backdropPath =
     tmdbDetails?.backdrop_path || tmdbDetails?.poster_path || "";
-  const posterUrl = posterPath
-    ? `${TMDB_IMAGE_BASE}/w500${posterPath}`
+  const seriesBasePath =
+    isSeriesEntry && backdropPath ? backdropPath : posterPath;
+  const posterUrl = seriesBasePath
+    ? `${TMDB_IMAGE_BASE}/${isSeriesEntry && backdropPath ? "w780" : "w500"}${seriesBasePath}`
     : entry.thumb ||
       getFallbackThumbnailForSource(entry.src || entry.sourceIdentity) ||
       "assets/images/thumbnail.jpg";
@@ -1114,26 +1116,59 @@ function buildCardFromLocalMovie(item) {
   return card;
 }
 
-function buildCardFromLocalSeries(item) {
+function buildCardFromLocalSeries(
+  item,
+  tmdbDetails = null,
+  imageBase = TMDB_IMAGE_BASE,
+) {
   const title =
-    String(item?.title || "Uploaded Series").trim() || "Uploaded Series";
-  const year = String(item?.year || "").trim() || "Local";
+    (String(tmdbDetails?.name || tmdbDetails?.title || "").trim() &&
+      String(tmdbDetails?.name || tmdbDetails?.title || "").trim()) ||
+    (String(item?.title || "Uploaded Series").trim() || "Uploaded Series");
+  const firstAirDate = String(
+    tmdbDetails?.first_air_date || tmdbDetails?.release_date || "",
+  ).trim();
+  const year = firstAirDate
+    ? firstAirDate.slice(0, 4)
+    : String(item?.year || "").trim() || "Local";
   const episodes = Array.isArray(item?.episodes) ? item.episodes : [];
   const firstEpisode = episodes[0] || null;
   const firstEpisodeTitle =
     String(firstEpisode?.title || "").trim() || "Episode 1";
-  const posterUrl =
+  const posterPath = tmdbDetails?.poster_path || tmdbDetails?.backdrop_path || "";
+  const backdropPath =
+    tmdbDetails?.backdrop_path || tmdbDetails?.poster_path || "";
+  const localPosterUrl =
     String(firstEpisode?.thumb || "").trim() || DEFAULT_LOCAL_THUMBNAIL;
-  const heroUrl = posterUrl;
+  const seriesBasePath = backdropPath || posterPath;
+  const posterUrl = seriesBasePath
+    ? `${imageBase}/${backdropPath ? "w780" : "w500"}${seriesBasePath}`
+    : localPosterUrl;
+  const heroUrl = backdropPath
+    ? `${imageBase}/original${backdropPath}`
+    : posterUrl;
   const safeTitle = escapeHtml(title);
-  const maturity = "13+";
-  const tagLine = "Uploaded <span>&bull;</span> Local Series";
+  const maturity = tmdbDetails?.adult ? "18" : "13+";
+  const genreNames = (tmdbDetails?.genres || [])
+    .map((genre) => String(genre?.name || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const tagLine = genreNames.length
+    ? genreNames.map(escapeHtml).join(" <span>&bull;</span> ")
+    : "Uploaded <span>&bull;</span> Series";
+  const seriesId = String(item?.id || "").trim();
+  const shouldHideEpisodePrefix =
+    /\bcourse\b/i.test(title) ||
+    /\bcourse\b/i.test(seriesId) ||
+    /\b(webinar|lesson|module|class)\b/i.test(firstEpisodeTitle);
 
   const card = document.createElement("article");
   card.className = "card";
   card.tabIndex = 0;
   card.dataset.title = title;
-  card.dataset.episode = `E1 ${firstEpisodeTitle}`;
+  card.dataset.episode = shouldHideEpisodePrefix
+    ? firstEpisodeTitle
+    : `E1 ${firstEpisodeTitle}`;
   card.dataset.src = "";
   card.dataset.thumb = heroUrl;
   card.dataset.year = year;
@@ -1142,11 +1177,12 @@ function buildCardFromLocalSeries(item) {
   card.dataset.quality = "HD";
   card.dataset.audio = "Stereo";
   card.dataset.description =
+    String(tmdbDetails?.overview || "").trim() ||
     String(firstEpisode?.description || "").trim() ||
     "Uploaded episodes from your local library.";
   card.dataset.cast = "Local file";
-  card.dataset.genres = "Uploaded, Series";
-  card.dataset.vibe = "Personal, Local";
+  card.dataset.genres = genreNames.length ? genreNames.join(", ") : "Series";
+  card.dataset.vibe = genreNames.length ? "Popular, Series" : "Personal, Local";
   card.dataset.mediaType = "tv";
   card.dataset.seriesId = String(item?.id || "").trim();
   card.dataset.episodeIndex = "0";
@@ -1287,8 +1323,35 @@ async function loadPopularTitles() {
         return rightUploadedAt - leftUploadedAt;
       },
     );
+    const imageBase = payload.imageBase || TMDB_IMAGE_BASE;
+    const localSeriesTmdbIds = Array.from(
+      new Set(
+        localSeries
+          .map((entry) => String(entry?.tmdbId || "").trim())
+          .filter(Boolean),
+      ),
+    );
+    const localSeriesDetailsMap = new Map();
+    await Promise.all(
+      localSeriesTmdbIds.map(async (tmdbId) => {
+        try {
+          const details = await apiFetch("/api/tmdb/details", {
+            tmdbId,
+            mediaType: "tv",
+          });
+          if (details && typeof details === "object") {
+            localSeriesDetailsMap.set(tmdbId, details);
+          }
+        } catch {
+          // Best-effort enrichment only.
+        }
+      }),
+    );
+
     localSeries.forEach((item) => {
-      cardsToRender.push(buildCardFromLocalSeries(item));
+      const tmdbId = String(item?.tmdbId || "").trim();
+      const tmdbDetails = tmdbId ? localSeriesDetailsMap.get(tmdbId) || null : null;
+      cardsToRender.push(buildCardFromLocalSeries(item, tmdbDetails, imageBase));
     });
     const localMovieTmdbIds = new Set(
       localMovies
@@ -1389,8 +1452,6 @@ async function loadPopularTitles() {
               { name: "Thriller" },
             ],
           };
-
-    const imageBase = payload.imageBase || TMDB_IMAGE_BASE;
 
     if (breakingBadSeries) {
       cardsToRender.push(buildCardFromTmdbSeries(breakingBadSeries, imageBase));

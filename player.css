@@ -54,6 +54,8 @@ body {
     color: #b8bcc3;
     background: transparent !important;
     background-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
     text-shadow: none !important;
 }
 
@@ -66,7 +68,9 @@ body {
 #playerVideo::-webkit-media-text-track-display,
 #playerVideo::-webkit-media-text-track-container,
 #playerVideo::-webkit-media-text-track-background,
-#playerVideo::-webkit-media-text-track-region {
+#playerVideo::-webkit-media-text-track-region,
+#playerVideo::-webkit-media-text-track-display-backdrop,
+#playerVideo::cue-region {
     background: transparent !important;
     background-color: transparent !important;
 }
@@ -198,6 +202,32 @@ body {
 
 .player-shell.controls-hidden .player-ui {
     opacity: 0;
+}
+
+.custom-subtitle-overlay {
+    position: absolute;
+    left: 50%;
+    bottom: clamp(128px, 18vh, 220px);
+    transform: translateX(-50%);
+    width: min(88vw, 1400px);
+    padding: 0 28px;
+    margin: 0;
+    pointer-events: none;
+    text-align: center;
+    color: #d4d7de;
+    font-size: clamp(1.55rem, 2.85vw, 3.3rem);
+    line-height: 1.18;
+    letter-spacing: 0.005em;
+    text-wrap: balance;
+    word-break: break-word;
+    z-index: 34;
+    text-shadow:
+        0 2px 8px rgba(0, 0, 0, 0.9),
+        0 0 1px rgba(0, 0, 0, 0.8);
+}
+
+.player-shell.controls-hidden .custom-subtitle-overlay {
+    bottom: clamp(64px, 10vh, 120px);
 }
 
 .player-shell.controls-hidden .top-row,

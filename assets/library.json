@@ -33,6 +33,53 @@
   ],
   "series": [
     {
+      "id": "local-series-electric-professional-electrical-course",
+      "title": "Electrics Lvl 3",
+      "tmdbId": "",
+      "year": "",
+      "preferredContainer": "mp4",
+      "requiresLocalEpisodeSources": true,
+      "episodes": [
+        {
+          "title": "Webinar 1 - Short Intro & basic Electrics",
+          "description": "",
+          "thumb": "assets/images/electrics-lvl3-thumb.png",
+          "src": "assets/videos/webinar-1-short-intro-basic-electrics-with-subs.mp4",
+          "seasonNumber": 1,
+          "episodeNumber": 1,
+          "uploadedAt": 1772496000000
+        },
+        {
+          "title": "Webinar 1 - Basic Electrics",
+          "description": "",
+          "thumb": "assets/images/electrics-lvl3-thumb.png",
+          "src": "assets/videos/Webinar- Electrics Webinar 1 - Basic Electrics by Access Training.mp4",
+          "seasonNumber": 1,
+          "episodeNumber": 2,
+          "uploadedAt": 1772496060000
+        }
+      ]
+    },
+    {
+      "id": "local-series-the-penguin",
+      "title": "The Penguin",
+      "tmdbId": "194764",
+      "year": "2024",
+      "preferredContainer": "mp4",
+      "requiresLocalEpisodeSources": true,
+      "episodes": [
+        {
+          "title": "After Hours",
+          "description": "",
+          "thumb": "assets/images/the-penguin-s01e01-thumb.jpg",
+          "src": "assets/videos/the-penguin-s01e01-after-hours-2160p-10bit-now-web-dl-ddp5-1-hevc-vyndros-aac-20260225021502-zlb8dy.mp4",
+          "seasonNumber": 1,
+          "episodeNumber": 1,
+          "uploadedAt": 1771985791448
+        }
+      ]
+    },
+    {
       "id": "local-series-breaking-bad",
       "title": "Breaking Bad",
       "tmdbId": "1396",

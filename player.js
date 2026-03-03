@@ -26,6 +26,7 @@ const sourcePanel = document.getElementById("sourcePanel");
 const sourceOptionsContainer = document.getElementById("sourceOptions");
 const sourceOptionDetails = document.getElementById("sourceOptionDetails");
 const episodeLabel = document.getElementById("episodeLabel");
+const subtitleOverlay = document.getElementById("subtitleOverlay");
 const resolverOverlay = document.getElementById("resolverOverlay");
 const resolverStatus = document.getElementById("resolverStatus");
 const resolverLoader = document.getElementById("resolverLoader");
@@ -67,6 +68,9 @@ let availableAudioTracks = [];
 let availableSubtitleTracks = [];
 let availablePlaybackSources = [];
 let subtitleTrackElement = null;
+let customSubtitleCues = [];
+let customSubtitleCueCursor = 0;
+let customSubtitleLoadToken = 0;
 let resolvedTrackPreferenceAudio = "auto";
 let preferredSubtitleLang = "";
 let audioOptions = [];
@@ -435,9 +439,13 @@ const rawSourceParam = String(params.get("src") || "").trim();
 const normalizedRawSourceParam = rawSourceParam.startsWith("assets/")
   ? `/${rawSourceParam}`
   : rawSourceParam;
+const rawSeriesSourceParam = String(activeSeriesEpisode?.src || "").trim();
+const normalizedSeriesSourceParam = rawSeriesSourceParam.startsWith("assets/")
+  ? `/${rawSeriesSourceParam}`
+  : rawSeriesSourceParam;
 const thumbParam = String(params.get("thumb") || "").trim();
 const src = isSeriesPlayback
-  ? String(activeSeriesEpisode?.src || "").trim()
+  ? normalizedSeriesSourceParam
   : normalizedRawSourceParam;
 const fallbackSeasonNumber = Number(
   params.get("seasonNumber") || params.get("season") || 1,
@@ -449,7 +457,12 @@ const rawTitle = isSeriesPlayback
   ? String(activeSeries.title || "")
   : params.get("title") || "Jeffrey Epstein: Filthy Rich";
 const rawEpisode = isSeriesPlayback
-  ? `E${seriesEpisodeIndex + 1} ${activeSeriesEpisode.title}`
+  ? getSeriesEpisodeLabel(
+      seriesEpisodeIndex,
+      activeSeriesEpisode?.title || "",
+      activeSeries,
+      Number(activeSeriesEpisode?.episodeNumber || seriesEpisodeIndex + 1),
+    )
   : params.get("episode") || "";
 const title = rawTitle;
 const episode = rawEpisode;
@@ -567,11 +580,15 @@ const RESUME_SAVE_MIN_INTERVAL_MS = 3000;
 const RESUME_SAVE_MIN_DELTA_SECONDS = 1.5;
 const RESUME_CLEAR_AT_END_THRESHOLD_SECONDS = 8;
 const CONTINUE_WATCHING_META_KEY = "netflix-continue-watching-meta";
-const SUBTITLE_LINE_FROM_BOTTOM = -2;
+const SUBTITLE_LINE_FROM_BOTTOM = -4;
+const SUBTITLE_FALLBACK_LINE_PERCENT = 80;
+const SUBTITLE_CUE_SIZE_PERCENT = 88;
+const SUBTITLE_CUE_POSITION_PERCENT = 50;
+const SUBTITLE_MATTE_LINE_LIFT_PERCENT = 8;
 const SUBTITLE_MATTE_MIN_HEIGHT_PX = 18;
 const SUBTITLE_MATTE_TOP_PADDING_PX = 6;
 const SUBTITLE_MATTE_BOTTOM_PADDING_PX = 14;
-const SUBTITLE_MATTE_BOTTOM_TARGET_OFFSET_PX = 38;
+const SUBTITLE_MATTE_BOTTOM_TARGET_OFFSET_PX = 82;
 const SUBTITLE_MATTE_TOP_GUARD_RATIO = 0.35;
 const subtitleLanguageNames = {
   off: "Off",
@@ -781,6 +798,8 @@ function applySubtitleCueColor(
       color: ${normalizedColor};
       background: transparent !important;
       background-color: transparent !important;
+      box-shadow: none !important;
+      outline: none !important;
       text-shadow: none !important;
     }
     #playerVideo::cue(*) {
@@ -791,7 +810,9 @@ function applySubtitleCueColor(
     #playerVideo::-webkit-media-text-track-display,
     #playerVideo::-webkit-media-text-track-container,
     #playerVideo::-webkit-media-text-track-background,
-    #playerVideo::-webkit-media-text-track-region {
+    #playerVideo::-webkit-media-text-track-region,
+    #playerVideo::-webkit-media-text-track-display-backdrop,
+    #playerVideo::cue-region {
       background: transparent !important;
       background-color: transparent !important;
     }
@@ -1293,6 +1314,271 @@ function getLanguageDisplayLabel(langCode) {
     return subtitleLanguageNames[normalized];
   }
   return normalized.toUpperCase();
+}
+
+function isGenericSubtitleLabel(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  if (!normalized) {
+    return true;
+  }
+  return (
+    normalized === "subtitlehandler" ||
+    normalized === "subtitles" ||
+    normalized === "subtitle" ||
+    normalized === "texthandler" ||
+    normalized === "text"
+  );
+}
+
+function getSubtitleTrackDisplayLabel(track) {
+  const languageLabel = getLanguageDisplayLabel(track?.language || "en");
+  if (track?.isExternal) {
+    return languageLabel;
+  }
+  const preferredLabel = String(track?.label || track?.title || "").trim();
+  if (isGenericSubtitleLabel(preferredLabel)) {
+    return languageLabel;
+  }
+  return preferredLabel || languageLabel;
+}
+
+function parseVttTimestampToSeconds(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^((\d{1,2}):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
+  if (!match) {
+    return NaN;
+  }
+
+  const hours = Number(match[2] || 0);
+  const minutes = Number(match[3] || 0);
+  const seconds = Number(match[4] || 0);
+  const milliseconds = Number((match[5] || "0").padEnd(3, "0"));
+  if (
+    !Number.isFinite(hours) ||
+    !Number.isFinite(minutes) ||
+    !Number.isFinite(seconds) ||
+    !Number.isFinite(milliseconds)
+  ) {
+    return NaN;
+  }
+
+  return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
+}
+
+function decodeSubtitleHtmlEntities(value) {
+  const text = String(value || "");
+  if (!text || !text.includes("&")) {
+    return text;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = text;
+  return textarea.value;
+}
+
+function parseWebVttCues(rawText) {
+  const normalized = String(rawText || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+  if (!normalized.trim()) {
+    return [];
+  }
+
+  const lines = normalized.split("\n");
+  const cues = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = String(lines[index] || "");
+    const trimmed = line.trim();
+
+    if (!trimmed || /^WEBVTT\b/i.test(trimmed)) {
+      index += 1;
+      continue;
+    }
+
+    if (/^STYLE\b/i.test(trimmed) || /^NOTE\b/i.test(trimmed)) {
+      index += 1;
+      while (index < lines.length && String(lines[index] || "").trim()) {
+        index += 1;
+      }
+      continue;
+    }
+
+    if (/^REGION\b/i.test(trimmed) || /^X-TIMESTAMP-MAP=/i.test(trimmed)) {
+      index += 1;
+      continue;
+    }
+
+    let timingLine = trimmed;
+    if (!timingLine.includes("-->")) {
+      const nextLine = String(lines[index + 1] || "").trim();
+      if (nextLine.includes("-->")) {
+        index += 1;
+        timingLine = nextLine;
+      } else {
+        index += 1;
+        continue;
+      }
+    }
+
+    const [startPart, endPart] = timingLine
+      .split("-->", 2)
+      .map((part) => String(part || "").trim());
+    const startToken = startPart.split(/\s+/)[0];
+    const endToken = endPart.split(/\s+/)[0];
+    const startSeconds = parseVttTimestampToSeconds(startToken);
+    const endSeconds = parseVttTimestampToSeconds(endToken);
+    index += 1;
+
+    const cueLines = [];
+    while (index < lines.length && String(lines[index] || "").trim()) {
+      cueLines.push(String(lines[index] || ""));
+      index += 1;
+    }
+
+    const rawCueText = cueLines.join("\n");
+    const cueText = decodeSubtitleHtmlEntities(
+      rawCueText
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/?[^>]+>/g, "")
+        .replace(/\u200b/g, ""),
+    ).trim();
+    if (
+      !cueText ||
+      !Number.isFinite(startSeconds) ||
+      !Number.isFinite(endSeconds) ||
+      endSeconds <= startSeconds
+    ) {
+      continue;
+    }
+
+    cues.push({ startSeconds, endSeconds, text: cueText });
+  }
+
+  return cues;
+}
+
+function setCustomSubtitleText(value) {
+  if (!subtitleOverlay) {
+    return;
+  }
+  const normalized = String(value || "").replace(/\r/g, "").trim();
+  if (!normalized) {
+    subtitleOverlay.hidden = true;
+    subtitleOverlay.textContent = "";
+    return;
+  }
+
+  subtitleOverlay.hidden = false;
+  subtitleOverlay.textContent = "";
+  const lines = normalized
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  lines.forEach((line, lineIndex) => {
+    const span = document.createElement("span");
+    span.textContent = line;
+    subtitleOverlay.appendChild(span);
+    if (lineIndex < lines.length - 1) {
+      subtitleOverlay.appendChild(document.createElement("br"));
+    }
+  });
+}
+
+function clearCustomSubtitleOverlay({ invalidateToken = false } = {}) {
+  if (invalidateToken) {
+    customSubtitleLoadToken += 1;
+  }
+  customSubtitleCues = [];
+  customSubtitleCueCursor = 0;
+  setCustomSubtitleText("");
+}
+
+function renderCustomSubtitleOverlay() {
+  if (!subtitleOverlay || selectedSubtitleStreamIndex < 0) {
+    setCustomSubtitleText("");
+    return;
+  }
+  if (!customSubtitleCues.length) {
+    setCustomSubtitleText("");
+    return;
+  }
+
+  const currentTimeSeconds = Number(video.currentTime || 0);
+  if (!Number.isFinite(currentTimeSeconds) || currentTimeSeconds < 0) {
+    return;
+  }
+
+  let cueIndex =
+    customSubtitleCueCursor >= 0 &&
+    customSubtitleCueCursor < customSubtitleCues.length
+      ? customSubtitleCueCursor
+      : 0;
+  const activeCue =
+    customSubtitleCues[cueIndex] &&
+    currentTimeSeconds >= customSubtitleCues[cueIndex].startSeconds &&
+    currentTimeSeconds <= customSubtitleCues[cueIndex].endSeconds
+      ? customSubtitleCues[cueIndex]
+      : null;
+
+  if (activeCue) {
+    setCustomSubtitleText(activeCue.text);
+    return;
+  }
+
+  cueIndex = customSubtitleCues.findIndex(
+    (cue) =>
+      currentTimeSeconds >= cue.startSeconds &&
+      currentTimeSeconds <= cue.endSeconds,
+  );
+  if (cueIndex >= 0) {
+    customSubtitleCueCursor = cueIndex;
+    setCustomSubtitleText(customSubtitleCues[cueIndex].text);
+    return;
+  }
+
+  setCustomSubtitleText("");
+}
+
+async function loadCustomSubtitleFromTrack(track) {
+  const vttUrl = String(track?.vttUrl || "").trim();
+  if (!vttUrl) {
+    clearCustomSubtitleOverlay({ invalidateToken: true });
+    return false;
+  }
+
+  const requestToken = customSubtitleLoadToken + 1;
+  customSubtitleLoadToken = requestToken;
+  customSubtitleCues = [];
+  customSubtitleCueCursor = 0;
+  setCustomSubtitleText("");
+  if (subtitleOverlay) {
+    subtitleOverlay.lang = String(track?.language || "en").trim() || "en";
+  }
+
+  try {
+    const requestUrl = `${vttUrl}${vttUrl.includes("?") ? "&" : "?"}ts=${Date.now()}`;
+    const response = await fetch(requestUrl, { cache: "no-store" });
+    if (!response.ok) {
+      return false;
+    }
+    const rawVtt = await response.text();
+    if (requestToken !== customSubtitleLoadToken) {
+      return false;
+    }
+    customSubtitleCues = parseWebVttCues(rawVtt);
+    customSubtitleCueCursor = 0;
+    renderCustomSubtitleOverlay();
+    return customSubtitleCues.length > 0;
+  } catch {
+    if (requestToken === customSubtitleLoadToken) {
+      clearCustomSubtitleOverlay();
+    }
+    return false;
+  }
 }
 
 function normalizeSourceHash(value) {
@@ -1905,6 +2191,7 @@ function destroyHlsInstance() {
 
 function clearSubtitleTrack() {
   if (!subtitleTrackElement) {
+    clearCustomSubtitleOverlay({ invalidateToken: true });
     return;
   }
   try {
@@ -1913,6 +2200,7 @@ function clearSubtitleTrack() {
     // Ignore DOM remove issues.
   }
   subtitleTrackElement = null;
+  clearCustomSubtitleOverlay({ invalidateToken: true });
 }
 
 function hideAllSubtitleTracks() {
@@ -1978,23 +2266,36 @@ function nudgeSubtitleTrackPlacementUp(textTrack) {
     return;
   }
   const matteCenteredLinePercent = computeSubtitleLinePercentInBottomMatte();
+  const resolvedLinePercent =
+    matteCenteredLinePercent !== null
+      ? Math.max(
+          0,
+          Math.min(100, matteCenteredLinePercent - SUBTITLE_MATTE_LINE_LIFT_PERCENT),
+        )
+      : SUBTITLE_FALLBACK_LINE_PERCENT;
 
   Array.from(textTrack.cues).forEach((cue) => {
-    if (!cue || !("line" in cue)) {
+    if (!cue) {
       return;
     }
 
     try {
-      if (matteCenteredLinePercent !== null) {
-        if ("snapToLines" in cue) {
-          cue.snapToLines = false;
-        }
-        cue.line = matteCenteredLinePercent;
+      if ("snapToLines" in cue) {
+        cue.snapToLines = false;
+      }
+      if ("line" in cue) {
+        cue.line = Number(resolvedLinePercent.toFixed(2));
       } else {
-        if ("snapToLines" in cue) {
-          cue.snapToLines = true;
-        }
         cue.line = SUBTITLE_LINE_FROM_BOTTOM;
+      }
+      if ("position" in cue) {
+        cue.position = SUBTITLE_CUE_POSITION_PERCENT;
+      }
+      if ("size" in cue) {
+        cue.size = SUBTITLE_CUE_SIZE_PERCENT;
+      }
+      if ("align" in cue) {
+        cue.align = "center";
       }
     } catch {
       // Ignore cue positioning failures for unsupported cue types.
@@ -2037,16 +2338,27 @@ function showSubtitleTrackElement(trackElement) {
 function syncSubtitleTrackVisibility() {
   if (subtitleTrackElement) {
     showSubtitleTrackElement(subtitleTrackElement);
+    setCustomSubtitleText("");
     return;
   }
   const selectedTrack = getSubtitleTrackByStreamIndex(
     selectedSubtitleStreamIndex,
   );
+  if (
+    selectedTrack &&
+    !shouldUseNativeEmbeddedSubtitleTrack(selectedTrack) &&
+    isPlayableSubtitleTrack(selectedTrack)
+  ) {
+    hideAllSubtitleTracks();
+    renderCustomSubtitleOverlay();
+    return;
+  }
   if (shouldUseNativeEmbeddedSubtitleTrack(selectedTrack)) {
     ensureNativeSubtitleTrackVisible();
     return;
   }
   hideAllSubtitleTracks();
+  setCustomSubtitleText("");
 }
 
 function isLikelyForcedSubtitleTrack(track) {
@@ -2168,25 +2480,12 @@ function applySubtitleTrackByStreamIndex(streamIndex) {
     selectedSubtitleStreamIndex = -1;
     return;
   }
-
-  const trackElement = document.createElement("track");
-  trackElement.kind = "subtitles";
-  trackElement.label =
-    selectedTrack.label ||
-    `${getLanguageDisplayLabel(selectedTrack.language)} subtitles`;
-  trackElement.srclang = selectedTrack.language || "und";
-  trackElement.src = `${selectedTrack.vttUrl}${selectedTrack.vttUrl.includes("?") ? "&" : "?"}ts=${Date.now()}`;
-  trackElement.default = true;
-  trackElement.addEventListener("load", () => {
-    nudgeSubtitleTrackPlacementUp(trackElement.track);
-    showSubtitleTrackElement(trackElement);
+  void loadCustomSubtitleFromTrack(selectedTrack).then(() => {
+    if (Number.isFinite(selectedSubtitleStreamIndex) && selectedSubtitleStreamIndex >= 0) {
+      renderCustomSubtitleOverlay();
+    }
   });
-  video.appendChild(trackElement);
-  subtitleTrackElement = trackElement;
   syncSubtitleTrackVisibility();
-  window.setTimeout(() => {
-    syncSubtitleTrackVisibility();
-  }, 220);
 }
 
 function rebuildTrackOptionButtons() {
@@ -2283,9 +2582,7 @@ function rebuildTrackOptionButtons() {
     button.dataset.optionType = "subtitle";
     button.dataset.subtitleStream = String(track.streamIndex);
     button.dataset.subtitleLang = String(track.language || "");
-    const cleanLabel = track.isExternal
-      ? getLanguageDisplayLabel(track.language)
-      : track.label || `${getLanguageDisplayLabel(track.language)} subtitles`;
+    const cleanLabel = getSubtitleTrackDisplayLabel(track);
     button.textContent = cleanLabel;
     button.setAttribute(
       "aria-selected",
@@ -2884,9 +3181,12 @@ async function resolveTmdbSourcesAndPlay({
     ).trim();
     setEpisodeLabel(
       resolved.metadata.displayTitle,
-      resolvedEpisodeTitle
-        ? `E${safeEpisodeNumber} ${resolvedEpisodeTitle}`
-        : `E${safeEpisodeNumber}`,
+      getSeriesEpisodeLabel(
+        Math.max(0, safeEpisodeNumber - 1),
+        resolvedEpisodeTitle,
+        activeSeries,
+        safeEpisodeNumber,
+      ),
     );
   } else if (resolved.metadata?.displayTitle) {
     const releaseYear = String(resolved.metadata.displayYear || "").trim();
@@ -2950,8 +3250,34 @@ function setEpisodeLabel(currentTitle, currentEpisode) {
   }
 }
 
-function getSeriesEpisodeLabel(index, episodeTitle) {
-  return `E${index + 1} ${String(episodeTitle || "").trim()}`;
+function shouldHideSeriesEpisodePrefix(seriesEntry = activeSeries) {
+  const seriesTitle = String(seriesEntry?.title || "").trim();
+  const seriesId = String(seriesEntry?.id || "").trim();
+  const firstEpisodeTitle = String(seriesEntry?.episodes?.[0]?.title || "").trim();
+  return (
+    /\bcourse\b/i.test(seriesTitle) ||
+    /\bcourse\b/i.test(seriesId) ||
+    /\b(webinar|lesson|module|class)\b/i.test(firstEpisodeTitle)
+  );
+}
+
+function getSeriesEpisodeLabel(
+  index,
+  episodeTitle,
+  seriesEntry = activeSeries,
+  episodeNumber = index + 1,
+) {
+  const safeEpisodeNumber =
+    Number.isFinite(Number(episodeNumber)) && Number(episodeNumber) > 0
+      ? Math.floor(Number(episodeNumber))
+      : index + 1;
+  const safeTitle = String(episodeTitle || "").trim();
+  if (shouldHideSeriesEpisodePrefix(seriesEntry)) {
+    return safeTitle || `Lesson ${safeEpisodeNumber}`;
+  }
+  return safeTitle
+    ? `E${safeEpisodeNumber} ${safeTitle}`
+    : `E${safeEpisodeNumber}`;
 }
 
 function seriesRequiresLocalEpisodeSources(seriesEntry = activeSeries) {
@@ -4862,9 +5188,11 @@ seekBar.addEventListener("input", () => {
 video.addEventListener("loadedmetadata", () => {
   syncSubtitleTrackVisibility();
   refreshActiveSubtitlePlacement();
+  renderCustomSubtitleOverlay();
   window.setTimeout(() => {
     syncSubtitleTrackVisibility();
     refreshActiveSubtitlePlacement();
+    renderCustomSubtitleOverlay();
   }, 200);
   const timelineDurationSeconds = getTimelineDurationSeconds();
   const seekScaleDurationSeconds = getSeekScaleDurationSeconds();
@@ -4918,6 +5246,8 @@ window.addEventListener("resize", refreshActiveSubtitlePlacement);
 document.addEventListener("fullscreenchange", refreshActiveSubtitlePlacement);
 
 video.addEventListener("timeupdate", syncSeekState);
+video.addEventListener("timeupdate", renderCustomSubtitleOverlay);
+video.addEventListener("seeking", renderCustomSubtitleOverlay);
 video.addEventListener("progress", syncSeekState);
 video.addEventListener("durationchange", syncSeekState);
 video.addEventListener("waiting", () => {
@@ -4927,6 +5257,7 @@ video.addEventListener("stalled", () => {
   scheduleStreamStallRecovery("Stream stalled, trying another source...");
 });
 video.addEventListener("seeked", () => {
+  renderCustomSubtitleOverlay();
   if (video.paused || video.readyState >= 2) {
     hideSeekLoadingIndicator();
   }
@@ -5195,6 +5526,8 @@ async function initPlaybackSource() {
   selectedAudioStreamIndex = -1;
   selectedSubtitleStreamIndex = -1;
   activeTrackSourceInput = "";
+  clearSubtitleTrack();
+  hideAllSubtitleTracks();
   rebuildTrackOptionButtons();
 
   if (hasExplicitSource) {
@@ -5202,17 +5535,26 @@ async function initPlaybackSource() {
     hideResolver();
     await resolveExplicitSourceTrackSelection(src);
     const localUploadSource = isExplicitLocalUploadSource;
+    const selectedSubtitleTrack = getSubtitleTrackByStreamIndex(
+      selectedSubtitleStreamIndex,
+    );
+    const shouldUseNativeSubtitleTrack = shouldUseNativeEmbeddedSubtitleTrack(
+      selectedSubtitleTrack,
+    );
     const shouldUseRemux =
       shouldUseSoftwareDecode(src) ||
       (!localUploadSource && selectedAudioStreamIndex >= 0) ||
-      selectedSubtitleStreamIndex >= 0;
+      shouldUseNativeSubtitleTrack;
+    const remuxSubtitleStreamIndex = shouldUseNativeSubtitleTrack
+      ? selectedSubtitleStreamIndex
+      : -1;
     const nextSource = shouldUseRemux
       ? buildSoftwareDecodeUrl(
           src,
           0,
           selectedAudioStreamIndex,
           preferredAudioSyncMs,
-          selectedSubtitleStreamIndex,
+          remuxSubtitleStreamIndex,
         )
       : src;
     if (await tryLaunchNativePlayback(nextSource, resumeTime)) {

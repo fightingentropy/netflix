@@ -2471,6 +2471,34 @@ function decodeSubtitleBytes(rawBytes) {
 }
 
 function normalizeSubtitleTextToVtt(rawText) {
+  const cueLinePercent = 80;
+  const cuePositionPercent = 50;
+  const cueSizePercent = 88;
+  const applyCueDisplaySettingsToTimingLine = (line) => {
+    const stripped = String(line || "")
+      .trim()
+      .replace(/\s+line:[^\s]+/gi, "")
+      .replace(/\s+position:[^\s]+/gi, "")
+      .replace(/\s+size:[^\s]+/gi, "")
+      .replace(/\s+align:[^\s]+/gi, "");
+    if (!stripped.includes("-->")) {
+      return stripped;
+    }
+    return `${stripped} line:${cueLinePercent}% position:${cuePositionPercent}% size:${cueSizePercent}% align:center`;
+  };
+
+  const buildTransparentCueStyleBlock = () =>
+    [
+      "STYLE",
+      "::cue {",
+      "  background-color: transparent;",
+      "}",
+      "::cue-region {",
+      "  background-color: transparent;",
+      "}",
+      "",
+    ].join("\n");
+
   const sanitizeVttBody = (input) => {
     const lines = String(input || "").split("\n");
     const output = [];
@@ -2517,10 +2545,13 @@ function normalizeSubtitleTextToVtt(rawText) {
         /^WEBVTT\b/i.test(trimmed) ||
         /^NOTE\b/i.test(trimmed) ||
         /^REGION\b/i.test(trimmed) ||
-        /^X-TIMESTAMP-MAP=/i.test(trimmed) ||
-        trimmed.includes("-->")
+        /^X-TIMESTAMP-MAP=/i.test(trimmed)
       ) {
         output.push(line);
+        continue;
+      }
+      if (trimmed.includes("-->")) {
+        output.push(applyCueDisplaySettingsToTimingLine(line));
         continue;
       }
 
@@ -2537,17 +2568,23 @@ function normalizeSubtitleTextToVtt(rawText) {
     .trim();
 
   if (!normalized) {
-    return "WEBVTT\n\n";
+    return `WEBVTT\n\n${buildTransparentCueStyleBlock()}`;
   }
 
   if (/^WEBVTT\b/i.test(normalized)) {
-    return `${sanitizeVttBody(normalized).trim()}\n`;
+    const sanitized = sanitizeVttBody(normalized);
+    const withoutHeader = sanitized
+      .replace(/^WEBVTT[^\n]*\n*/i, "")
+      .trim();
+    const styleBlock = buildTransparentCueStyleBlock();
+    return `WEBVTT\n\n${styleBlock}${withoutHeader}\n`;
   }
 
   const vttBody = sanitizeVttBody(
     normalized.replace(/(\d{2}:\d{2}(?::\d{2})?),(\d{3})/g, "$1.$2"),
-  );
-  return `WEBVTT\n\n${vttBody}\n`;
+  ).trim();
+  const styleBlock = buildTransparentCueStyleBlock();
+  return `WEBVTT\n\n${styleBlock}${vttBody}\n`;
 }
 
 function buildExternalSubtitleLabel(entry) {
@@ -3581,7 +3618,7 @@ function parseProbeTracksFromFfprobePayload(payload, sourceInput) {
     const tags =
       stream?.tags && typeof stream.tags === "object" ? stream.tags : {};
     const language = normalizeIsoLanguage(tags.language || tags.LANGUAGE || "");
-    const title = String(tags.title || tags.handler_name || "").trim();
+    const streamTitle = String(tags.title || tags.handler_name || "").trim();
     const disposition =
       stream?.disposition && typeof stream.disposition === "object"
         ? stream.disposition
@@ -3619,19 +3656,29 @@ function parseProbeTracksFromFfprobePayload(payload, sourceInput) {
       audioTracks.push({
         streamIndex,
         language,
-        title,
+        title: streamTitle,
         codec,
         channels,
         isDefault,
         startTimeSeconds,
         label:
-          title ||
+          streamTitle ||
           `${(language || "und").toUpperCase()}${channels ? ` ${channels}ch` : ""}`.trim(),
       });
       return;
     }
 
     if (codecType === "subtitle") {
+      const subtitleTitle = String(tags.title || "").trim();
+      const subtitleHandlerName = String(tags.handler_name || "").trim();
+      const isGenericSubtitleHandler = /^(subtitle\s*handler|subtitlehandler|subtitles?|text|mov[_\s-]?text)$/i.test(
+        subtitleHandlerName,
+      );
+      const normalizedSubtitleTitle = subtitleTitle
+        ? subtitleTitle
+        : isGenericSubtitleHandler
+          ? ""
+          : subtitleHandlerName;
       const textCodecSet = new Set([
         "subrip",
         "srt",
@@ -3644,12 +3691,14 @@ function parseProbeTracksFromFfprobePayload(payload, sourceInput) {
       subtitleTracks.push({
         streamIndex,
         language,
-        title,
+        title: normalizedSubtitleTitle,
         codec,
         isDefault,
         isTextBased: textCodecSet.has(codec),
         isExternal: false,
-        label: title || `${(language || "und").toUpperCase()} subtitles`,
+        label:
+          normalizedSubtitleTitle ||
+          getSubtitleLanguageDisplayName(language || "en"),
         vttUrl: textCodecSet.has(codec)
           ? `/api/subtitles.vtt?${new URLSearchParams({
               input: sourceInput,
@@ -4747,7 +4796,7 @@ async function extractSubtitleVttText(sourceInput, subtitleStreamIndex) {
     subtitleText = "";
   }
   if (String(subtitleText || "").trim()) {
-    return subtitleText;
+    return normalizeSubtitleTextToVtt(subtitleText);
   }
 
   try {
@@ -4765,7 +4814,10 @@ async function extractSubtitleVttText(sourceInput, subtitleStreamIndex) {
     subtitleText = "";
   }
 
-  return subtitleText;
+  if (!String(subtitleText || "").trim()) {
+    return "";
+  }
+  return normalizeSubtitleTextToVtt(subtitleText);
 }
 
 async function createExternalSubtitleVttResponse(downloadUrl) {
