@@ -44,11 +44,12 @@ const STREAM_QUALITY_PREF_KEY = "netflix-stream-quality-pref";
 const PROFILE_AVATAR_STYLE_PREF_KEY = "netflix-profile-avatar-style";
 const PROFILE_AVATAR_MODE_PREF_KEY = "netflix-profile-avatar-mode";
 const PROFILE_AVATAR_IMAGE_PREF_KEY = "netflix-profile-avatar-image";
+const HERO_TRAILER_MUTED_PREF_KEY = "netflix-hero-trailer-muted-v2";
 const RESUME_STORAGE_PREFIX = "netflix-resume:";
 const CONTINUE_WATCHING_META_KEY = "netflix-continue-watching-meta";
 const JEFFREY_EPSTEIN_SERIES_ID = "jeffrey-epstein-filthy-rich";
 const JEFFREY_EPSTEIN_EPISODE_1_SOURCE =
-  "assets/videos/Jeffrey.Epstein.Filthy.Rich.S01E01.2160p.NF.WEB-DL.DDP5.1.SDR.HEVC-DiSGUSTiNG.mp4";
+  "assets/videos/jeffrey-epstein-filthy-rich-official-trailer-netflix.mp4";
 const BREAKING_BAD_SERIES_ID = "breaking-bad";
 const PRIDE_PREJUDICE_SOURCE =
   "assets/videos/Pride.Prejudice.2005.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.MX].mp4";
@@ -129,6 +130,63 @@ function getStoredAvatarImagePreference() {
   } catch {
     return "";
   }
+}
+
+function getStoredHeroTrailerMutedPreference() {
+  try {
+    const rawValue = String(
+      localStorage.getItem(HERO_TRAILER_MUTED_PREF_KEY) || "",
+    )
+      .trim()
+      .toLowerCase();
+    if (
+      rawValue === "true" ||
+      rawValue === "1" ||
+      rawValue === "yes" ||
+      rawValue === "on"
+    ) {
+      return true;
+    }
+    if (
+      rawValue === "false" ||
+      rawValue === "0" ||
+      rawValue === "no" ||
+      rawValue === "off"
+    ) {
+      return false;
+    }
+  } catch {
+    // Ignore localStorage failures.
+  }
+  // Default to sound on unless user explicitly muted.
+  return false;
+}
+
+function setStoredHeroTrailerMutedPreference(isMuted) {
+  try {
+    localStorage.setItem(
+      HERO_TRAILER_MUTED_PREF_KEY,
+      isMuted ? "true" : "false",
+    );
+  } catch {
+    // Ignore localStorage failures.
+  }
+}
+
+function applyStoredHeroTrailerAudioPreference() {
+  if (!(introVideo instanceof HTMLVideoElement)) {
+    return;
+  }
+  const preferredMuted = getStoredHeroTrailerMutedPreference();
+  introVideo.muted = preferredMuted;
+  if (!introVideo.paused) {
+    return;
+  }
+
+  void introVideo.play().catch(() => {
+    // Ignore autoplay failures (e.g. sound autoplay restrictions) but keep
+    // the preferred mute state unchanged.
+  });
 }
 
 function applyAccountAvatarStyle({
@@ -1044,23 +1102,35 @@ function buildPridePrejudiceCard() {
 function buildCardFromLocalMovie(item) {
   const title =
     String(item?.title || "Uploaded Movie").trim() || "Uploaded Movie";
+  const id = String(item?.id || "").trim();
+  const src = String(item?.src || "").trim();
+  const looksLikeCourse =
+    String(item?.contentKind || "")
+      .trim()
+      .toLowerCase() === "course" ||
+    /\b(course|lesson|module|class|lecture|webinar)\b/i.test(
+      `${title} ${id} ${src}`.trim(),
+    );
   const year = String(item?.year || "").trim() || "Local";
   const maturity = "13+";
   const qualityLabel = "HD";
   const posterUrl = String(item?.thumb || "").trim() || DEFAULT_LOCAL_THUMBNAIL;
   const heroUrl = posterUrl;
   const safeTitle = escapeHtml(title);
-  const tagLine = "Uploaded <span>&bull;</span> Local Library";
+  const mediaLabel = looksLikeCourse ? "Course" : "Movie";
+  const tagLine = looksLikeCourse
+    ? "Uploaded <span>&bull;</span> Course"
+    : "Uploaded <span>&bull;</span> Local Library";
 
   const card = document.createElement("article");
   card.className = "card";
   card.tabIndex = 0;
   card.dataset.title = title;
   card.dataset.episode = year || "";
-  card.dataset.src = String(item?.src || "").trim();
+  card.dataset.src = src;
   card.dataset.thumb = heroUrl;
   card.dataset.year = year;
-  card.dataset.runtime = "Movie";
+  card.dataset.runtime = mediaLabel;
   card.dataset.maturity = maturity;
   card.dataset.quality = qualityLabel;
   card.dataset.audio = "Stereo";
@@ -1068,8 +1138,8 @@ function buildCardFromLocalMovie(item) {
     String(item?.description || "").trim() ||
     "Uploaded from your local library.";
   card.dataset.cast = "Local file";
-  card.dataset.genres = "Uploaded, Local";
-  card.dataset.vibe = "Personal, Local";
+  card.dataset.genres = looksLikeCourse ? "Uploaded, Course" : "Uploaded, Local";
+  card.dataset.vibe = looksLikeCourse ? "Learning, Local" : "Personal, Local";
   card.dataset.mediaType = "movie";
   if (item?.tmdbId) {
     card.dataset.tmdbId = String(item.tmdbId).trim();
@@ -1106,7 +1176,7 @@ function buildCardFromLocalMovie(item) {
           <span class="meta-age">${maturity}</span>
           <span>${year}</span>
           <span class="meta-chip">${qualityLabel}</span>
-          <span class="meta-spatial">Movie</span>
+          <span class="meta-spatial">${mediaLabel}</span>
         </div>
         <p class="card-hover-tags">${tagLine}</p>
       </div>
@@ -1133,8 +1203,18 @@ function buildCardFromLocalSeries(
     : String(item?.year || "").trim() || "Local";
   const episodes = Array.isArray(item?.episodes) ? item.episodes : [];
   const firstEpisode = episodes[0] || null;
+  const seriesId = String(item?.id || "").trim();
+  const contentKind = String(item?.contentKind || "")
+    .trim()
+    .toLowerCase();
+  const isCourse =
+    contentKind === "course" ||
+    /\bcourse\b/i.test(title) ||
+    /\bcourse\b/i.test(seriesId);
+  const mediaLabel = isCourse ? "Course" : "Series";
   const firstEpisodeTitle =
-    String(firstEpisode?.title || "").trim() || "Episode 1";
+    String(firstEpisode?.title || "").trim() ||
+    (isCourse ? "Lesson 1" : "Episode 1");
   const posterPath = tmdbDetails?.poster_path || tmdbDetails?.backdrop_path || "";
   const backdropPath =
     tmdbDetails?.backdrop_path || tmdbDetails?.poster_path || "";
@@ -1155,12 +1235,9 @@ function buildCardFromLocalSeries(
     .slice(0, 3);
   const tagLine = genreNames.length
     ? genreNames.map(escapeHtml).join(" <span>&bull;</span> ")
-    : "Uploaded <span>&bull;</span> Series";
-  const seriesId = String(item?.id || "").trim();
+    : `Uploaded <span>&bull;</span> ${mediaLabel}`;
   const shouldHideEpisodePrefix =
-    /\bcourse\b/i.test(title) ||
-    /\bcourse\b/i.test(seriesId) ||
-    /\b(webinar|lesson|module|class)\b/i.test(firstEpisodeTitle);
+    isCourse || /\b(webinar|lesson|module|class)\b/i.test(firstEpisodeTitle);
 
   const card = document.createElement("article");
   card.className = "card";
@@ -1172,17 +1249,23 @@ function buildCardFromLocalSeries(
   card.dataset.src = "";
   card.dataset.thumb = heroUrl;
   card.dataset.year = year;
-  card.dataset.runtime = "Series";
+  card.dataset.runtime = mediaLabel;
   card.dataset.maturity = maturity;
   card.dataset.quality = "HD";
   card.dataset.audio = "Stereo";
   card.dataset.description =
     String(tmdbDetails?.overview || "").trim() ||
     String(firstEpisode?.description || "").trim() ||
-    "Uploaded episodes from your local library.";
+    (isCourse
+      ? "Uploaded lessons from your local library."
+      : "Uploaded episodes from your local library.");
   card.dataset.cast = "Local file";
-  card.dataset.genres = genreNames.length ? genreNames.join(", ") : "Series";
-  card.dataset.vibe = genreNames.length ? "Popular, Series" : "Personal, Local";
+  card.dataset.genres = genreNames.length ? genreNames.join(", ") : mediaLabel;
+  card.dataset.vibe = genreNames.length
+    ? `Popular, ${mediaLabel}`
+    : isCourse
+      ? "Learning, Local"
+      : "Personal, Local";
   card.dataset.mediaType = "tv";
   card.dataset.seriesId = String(item?.id || "").trim();
   card.dataset.episodeIndex = "0";
@@ -1221,7 +1304,7 @@ function buildCardFromLocalSeries(
           <span class="meta-age">${maturity}</span>
           <span>${year}</span>
           <span class="meta-chip">HD</span>
-          <span class="meta-spatial">Series</span>
+          <span class="meta-spatial">${mediaLabel}</span>
         </div>
         <p class="card-hover-tags">${tagLine}</p>
       </div>
@@ -1244,7 +1327,7 @@ function renderPopularCards(cardsToRender) {
 
 async function loadPopularTitles() {
   if (!cardsContainer) return;
-  const cardsToRender = [buildPridePrejudiceCard()];
+  const cardsToRender = [];
   const normalizeTitleKey = (value) =>
     String(value || "")
       .trim()
@@ -1263,32 +1346,12 @@ async function loadPopularTitles() {
   };
 
   try {
-    const [
-      localLibrary,
-      payload,
-      darkKnightDetails,
-      inceptionDetails,
-      interstellarDetails,
-      breakingBadDetails,
-    ] = await Promise.all([
+    const [localLibrary, payload] = await Promise.all([
       apiFetch("/api/library").catch(() => ({ movies: [], series: [] })),
-      apiFetch("/api/tmdb/popular-movies", { page: "1" }),
-      apiFetch("/api/tmdb/details", {
-        tmdbId: "155",
-        mediaType: "movie",
-      }).catch(() => null),
-      apiFetch("/api/tmdb/details", {
-        tmdbId: "27205",
-        mediaType: "movie",
-      }).catch(() => null),
-      apiFetch("/api/tmdb/details", {
-        tmdbId: "157336",
-        mediaType: "movie",
-      }).catch(() => null),
-      apiFetch("/api/tmdb/details", {
-        tmdbId: "1396",
-        mediaType: "tv",
-      }).catch(() => null),
+      apiFetch("/api/tmdb/popular-movies", { page: "1" }).catch(() => ({
+        genres: [],
+        imageBase: TMDB_IMAGE_BASE,
+      })),
     ]);
 
     const localSeries = Array.isArray(localLibrary?.series)
@@ -1372,11 +1435,7 @@ async function loadPopularTitles() {
     (payload.genres || []).forEach((genre) => {
       genreMap.set(genre.id, genre.name);
     });
-    const popularMovies = [
-      normalizeMovie(darkKnightDetails),
-      normalizeMovie(inceptionDetails),
-      normalizeMovie(interstellarDetails),
-    ].filter(Boolean);
+    const popularMovies = [];
     const popularMoviesByTmdbId = new Map(
       popularMovies.map((movie) => [String(movie.id), movie]),
     );
@@ -1437,40 +1496,6 @@ async function loadPopularTitles() {
       cardsToRender.push(buildCardFromLocalMovie(item));
     });
 
-    const breakingBadSeries =
-      breakingBadDetails && typeof breakingBadDetails === "object"
-        ? breakingBadDetails
-        : {
-            id: 1396,
-            name: "Breaking Bad",
-            first_air_date: "2008-01-20",
-            overview:
-              "A chemistry teacher diagnosed with cancer teams with a former student to build a meth empire.",
-            genres: [
-              { name: "Drama" },
-              { name: "Crime" },
-              { name: "Thriller" },
-            ],
-          };
-
-    if (breakingBadSeries) {
-      cardsToRender.push(buildCardFromTmdbSeries(breakingBadSeries, imageBase));
-    }
-    popularMovies.forEach((item) => {
-      const tmdbId = String(item?.id || "").trim();
-      const titleKey = normalizeTitleKey(item?.title || item?.name || "");
-      const yearKey = String(
-        item?.release_date || item?.first_air_date || "",
-      ).slice(0, 4);
-      const titleYearKey = titleKey ? `${titleKey}|${yearKey}` : "";
-      if (
-        (tmdbId && localMovieTmdbIds.has(tmdbId)) ||
-        (titleYearKey && localMovieTitleYearKeys.has(titleYearKey))
-      ) {
-        return;
-      }
-      cardsToRender.push(buildCardFromTmdb(item, genreMap, imageBase));
-    });
   } catch (error) {
     console.error("Failed to load TMDB popular movie titles:", error);
   }
@@ -1586,6 +1611,7 @@ function getJeffreyEpsteinHeroDestination() {
 
 muteToggle.addEventListener("click", async () => {
   introVideo.muted = !introVideo.muted;
+  setStoredHeroTrailerMutedPreference(introVideo.muted);
   syncMuteUI();
   if (introVideo.paused) {
     try {
@@ -1707,7 +1733,7 @@ function openPlayerPage({
   }
 
   if (!normalizedSrc && !tmdbId && !normalizedSeriesId) {
-    params.set("src", "assets/videos/intro.mp4");
+    params.set("src", JEFFREY_EPSTEIN_EPISODE_1_SOURCE);
   }
 
   window.location.href = `player.html?${params.toString()}`;
@@ -2133,6 +2159,7 @@ document.addEventListener("pointerdown", (event) => {
   closeAccountMenu();
 });
 
+applyStoredHeroTrailerAudioPreference();
 syncMuteUI();
 void loadContinueWatching();
 loadPopularTitles();
@@ -2161,5 +2188,10 @@ window.addEventListener("storage", (event) => {
     event.key.startsWith(RESUME_STORAGE_PREFIX)
   ) {
     void loadContinueWatching();
+  }
+
+  if (event.key === HERO_TRAILER_MUTED_PREF_KEY) {
+    applyStoredHeroTrailerAudioPreference();
+    syncMuteUI();
   }
 });

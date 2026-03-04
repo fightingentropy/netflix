@@ -81,10 +81,11 @@ let seriesEpisodeThumbHydrationTask = null;
 let hasHydratedSeriesEpisodeThumbs = false;
 
 const params = new URLSearchParams(window.location.search);
-const DEFAULT_TRAILER_SOURCE = "assets/videos/intro.mp4";
+const DEFAULT_TRAILER_SOURCE =
+  "assets/videos/jeffrey-epstein-filthy-rich-official-trailer-netflix.mp4";
 const DEFAULT_EPISODE_THUMBNAIL = "assets/images/thumbnail.jpg";
 const JEFFREY_EPSTEIN_EPISODE_1_SOURCE =
-  "assets/videos/Jeffrey.Epstein.Filthy.Rich.S01E01.2160p.NF.WEB-DL.DDP5.1.SDR.HEVC-DiSGUSTiNG.mp4";
+  "assets/videos/jeffrey-epstein-filthy-rich-official-trailer-netflix.mp4";
 const STATIC_SERIES_LIBRARY = {
   "jeffrey-epstein-filthy-rich": {
     id: "jeffrey-epstein-filthy-rich",
@@ -195,12 +196,22 @@ const STATIC_SERIES_LIBRARY = {
   },
 };
 
+function normalizeSeriesContentKind(value, fallback = "series") {
+  return String(value || fallback || "")
+    .trim()
+    .toLowerCase() === "course"
+    ? "course"
+    : "series";
+}
+
 function cloneSeriesEpisode(entry = {}) {
+  const contentKind = normalizeSeriesContentKind(entry?.contentKind);
   return {
     title: String(entry?.title || "").trim(),
     description: String(entry?.description || "").trim(),
     thumb: String(entry?.thumb || "").trim() || DEFAULT_EPISODE_THUMBNAIL,
     src: String(entry?.src || "").trim(),
+    contentKind,
     seasonNumber: Math.max(1, Math.floor(Number(entry?.seasonNumber || 1))),
     episodeNumber: Math.max(1, Math.floor(Number(entry?.episodeNumber || 1))),
   };
@@ -213,13 +224,21 @@ function mergeSeriesLibraries(staticLibrary = {}, localLibrary = {}) {
 
   staticEntries.forEach(([seriesId, series]) => {
     const tmdbId = String(series?.tmdbId || "").trim();
+    const seriesContentKind = normalizeSeriesContentKind(series?.contentKind);
     if (tmdbId) {
       staticTmdbToSeriesId.set(tmdbId, seriesId);
     }
     merged[seriesId] = {
       ...series,
+      contentKind: seriesContentKind,
       episodes: Array.isArray(series?.episodes)
-        ? series.episodes.map((episode) => cloneSeriesEpisode(episode))
+        ? series.episodes.map((episode) =>
+            cloneSeriesEpisode({
+              ...episode,
+              contentKind:
+                episode?.contentKind || seriesContentKind || "series",
+            }),
+          )
         : [],
     };
   });
@@ -227,6 +246,10 @@ function mergeSeriesLibraries(staticLibrary = {}, localLibrary = {}) {
   const localEntries = Object.values(localLibrary || {});
   localEntries.forEach((series) => {
     const localTmdbId = String(series?.tmdbId || "").trim();
+    const localSeriesContentKind = normalizeSeriesContentKind(
+      series?.contentKind,
+      /\bcourse\b/i.test(String(series?.id || "").trim()) ? "course" : "series",
+    );
     const localId = String(series?.id || "")
       .trim()
       .toLowerCase();
@@ -245,6 +268,7 @@ function mergeSeriesLibraries(staticLibrary = {}, localLibrary = {}) {
         title: String(series?.title || "Series").trim() || "Series",
         tmdbId: localTmdbId,
         year: String(series?.year || "").trim(),
+        contentKind: localSeriesContentKind,
         preferredContainer: "mp4",
         requiresLocalEpisodeSources: true,
         episodes: [],
@@ -260,7 +284,13 @@ function mergeSeriesLibraries(staticLibrary = {}, localLibrary = {}) {
       : [];
 
     localEpisodes.forEach((episode) => {
-      const nextEpisode = cloneSeriesEpisode(episode);
+      const nextEpisode = cloneSeriesEpisode({
+        ...episode,
+        contentKind:
+          episode?.contentKind ||
+          targetSeries.contentKind ||
+          localSeriesContentKind,
+      });
       if (!nextEpisode.src) {
         return;
       }
@@ -274,6 +304,7 @@ function mergeSeriesLibraries(staticLibrary = {}, localLibrary = {}) {
         targetEpisodes[existingIndex] = {
           ...targetEpisodes[existingIndex],
           src: nextEpisode.src,
+          contentKind: nextEpisode.contentKind,
           thumb:
             String(nextEpisode.thumb || "").trim() ||
             String(targetEpisodes[existingIndex]?.thumb || "").trim() ||
@@ -302,6 +333,10 @@ function mergeSeriesLibraries(staticLibrary = {}, localLibrary = {}) {
     });
 
     targetSeries.episodes = targetEpisodes;
+    targetSeries.contentKind = normalizeSeriesContentKind(
+      targetSeries.contentKind || localSeriesContentKind,
+      localSeriesContentKind,
+    );
     targetSeries.requiresLocalEpisodeSources =
       Boolean(targetSeries.requiresLocalEpisodeSources) ||
       Boolean(series?.requiresLocalEpisodeSources);
@@ -325,6 +360,10 @@ function normalizeLocalSeriesLibrary(payload) {
     if (!id || !title) {
       return;
     }
+    const contentKind = normalizeSeriesContentKind(
+      entry?.contentKind,
+      /\bcourse\b/i.test(`${id} ${title}`.trim()) ? "course" : "series",
+    );
     const episodes = Array.isArray(entry?.episodes)
       ? entry.episodes
           .map((episode, index) => {
@@ -334,14 +373,22 @@ function normalizeLocalSeriesLibrary(payload) {
             }
             const seasonNumber = Number(episode?.seasonNumber || 1);
             const episodeNumber = Number(episode?.episodeNumber || index + 1);
+            const episodeContentKind = normalizeSeriesContentKind(
+              episode?.contentKind,
+              contentKind,
+            );
+            const fallbackTitlePrefix =
+              episodeContentKind === "course" ? "Lesson" : "Episode";
             return {
               title:
-                String(episode?.title || "").trim() || `Episode ${index + 1}`,
+                String(episode?.title || "").trim() ||
+                `${fallbackTitlePrefix} ${index + 1}`,
               description: String(episode?.description || "").trim(),
               thumb:
                 String(episode?.thumb || "").trim() ||
                 DEFAULT_EPISODE_THUMBNAIL,
               src,
+              contentKind: episodeContentKind,
               seasonNumber:
                 Number.isFinite(seasonNumber) && seasonNumber > 0
                   ? Math.floor(seasonNumber)
@@ -368,6 +415,7 @@ function normalizeLocalSeriesLibrary(payload) {
     nextLibrary[id] = {
       id,
       title,
+      contentKind,
       tmdbId: /^\d+$/.test(String(entry?.tmdbId || "").trim())
         ? String(entry.tmdbId).trim()
         : "",
@@ -3343,19 +3391,44 @@ function setEpisodeLabel(currentTitle, currentEpisode) {
   episodeLabel.appendChild(strong);
 
   if (formattedEpisode) {
-    episodeLabel.append(` ${formattedEpisode}`);
+    const shouldUseHyphenSeparator =
+      !/^e\d+\b/i.test(formattedEpisode) &&
+      !/^[-–—]/.test(formattedEpisode);
+    episodeLabel.append(
+      shouldUseHyphenSeparator
+        ? ` - ${formattedEpisode}`
+        : ` ${formattedEpisode}`,
+    );
   }
 }
 
 function shouldHideSeriesEpisodePrefix(seriesEntry = activeSeries) {
   const seriesTitle = String(seriesEntry?.title || "").trim();
   const seriesId = String(seriesEntry?.id || "").trim();
+  const contentKind = String(
+    seriesEntry?.contentKind || seriesEntry?.episodes?.[0]?.contentKind || "",
+  )
+    .trim()
+    .toLowerCase();
   const firstEpisodeTitle = String(seriesEntry?.episodes?.[0]?.title || "").trim();
   return (
+    contentKind === "course" ||
     /\bcourse\b/i.test(seriesTitle) ||
     /\bcourse\b/i.test(seriesId) ||
     /\b(webinar|lesson|module|class)\b/i.test(firstEpisodeTitle)
   );
+}
+
+function normalizeCourseEpisodeDisplayTitle(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  return raw
+    .replace(/^webinar-\s*electrics\s*webinar\s*(\d+)\s*-\s*/i, "Webinar $1 - ")
+    .replace(/\s+by\s+access\s+training\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function getSeriesEpisodeLabel(
@@ -3369,8 +3442,10 @@ function getSeriesEpisodeLabel(
       ? Math.floor(Number(episodeNumber))
       : index + 1;
   const safeTitle = String(episodeTitle || "").trim();
-  if (shouldHideSeriesEpisodePrefix(seriesEntry)) {
-    return safeTitle || `Lesson ${safeEpisodeNumber}`;
+  const isCourseEntry = shouldHideSeriesEpisodePrefix(seriesEntry);
+  if (isCourseEntry) {
+    const normalizedCourseTitle = normalizeCourseEpisodeDisplayTitle(safeTitle);
+    return normalizedCourseTitle || `Lesson ${safeEpisodeNumber}`;
   }
   return safeTitle
     ? `E${safeEpisodeNumber} ${safeTitle}`
