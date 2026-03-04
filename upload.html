@@ -102,6 +102,14 @@
                             />
                             Series Episode</label
                         >
+                        <label
+                            ><input
+                                type="radio"
+                                name="contentType"
+                                value="course"
+                            />
+                            Course Lesson</label
+                        >
                     </fieldset>
 
                     <div class="grid">
@@ -123,15 +131,19 @@
                             />
                         </label>
                         <label class="episode-only" hidden>
-                            Series Title
+                            <span id="seriesTitleFieldLabel"
+                                >Series Title</span
+                            >
                             <input
                                 name="seriesTitle"
                                 type="text"
                                 placeholder="Series name"
+                                data-series-placeholder="Series name"
+                                data-course-placeholder="Course title"
                             />
                         </label>
                         <label class="episode-only" hidden>
-                            Season
+                            <span id="seasonNumberFieldLabel">Season</span>
                             <input
                                 name="seasonNumber"
                                 type="number"
@@ -140,7 +152,7 @@
                             />
                         </label>
                         <label class="episode-only" hidden>
-                            Episode
+                            <span id="episodeNumberFieldLabel">Episode</span>
                             <input
                                 name="episodeNumber"
                                 type="number"
@@ -149,11 +161,15 @@
                             />
                         </label>
                         <label class="episode-only" hidden>
-                            Episode Title
+                            <span id="episodeTitleFieldLabel"
+                                >Episode Title</span
+                            >
                             <input
                                 name="episodeTitle"
                                 type="text"
                                 placeholder="Episode title"
+                                data-series-placeholder="Episode title"
+                                data-course-placeholder="Lesson title"
                             />
                         </label>
                     </div>

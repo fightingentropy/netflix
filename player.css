@@ -6,6 +6,13 @@
     --ui-line: rgba(245, 245, 245, 0.38);
     --ui-buffered: rgba(245, 245, 245, 0.9);
     --ui-accent: #e50914;
+    --font-netflix-sans:
+        "Netflix Sans",
+        "Helvetica Neue",
+        "Segoe UI",
+        Roboto,
+        Ubuntu,
+        sans-serif;
 }
 
 * {
@@ -23,7 +30,7 @@ body {
     height: 100%;
     background: var(--player-bg);
     color: var(--ui-white);
-    font-family: "Archivo", sans-serif;
+    font-family: var(--font-netflix-sans);
 }
 
 .player-shell {

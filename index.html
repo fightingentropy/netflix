@@ -10,27 +10,21 @@
             href="assets/icons/netflix-n.svg"
         />
         <link rel="apple-touch-icon" href="assets/icons/netflix-n.svg" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Bebas+Neue&family=Cormorant+Garamond:ital,wght@0,600;1,600&display=swap"
-            rel="stylesheet"
-        />
         <link rel="stylesheet" href="style.css" />
     </head>
     <body>
         <div class="page" tabindex="0">
             <header class="top-nav">
                 <div class="nav-left">
-                    <a href="/" aria-label="Go to homepage">
+                    <a href="/" class="nav-logo" aria-label="Go to homepage">
                         <img
-                            src="assets/icons/netflix-n.svg"
-                            class="logo"
+                            src="assets/icons/netflix-logo-clean.png"
+                            class="logo-wordmark-image"
                             alt="Netflix"
                         />
                     </a>
                     <nav>
-                        <a href="#">Home</a>
+                        <a href="#" class="is-active">Home</a>
                         <a href="#">Series</a>
                         <a href="#">Films</a>
                         <a href="#" class="optional">Games</a>
@@ -121,19 +115,22 @@
             <video
                 id="introVideo"
                 class="hero-video"
-                src="assets/videos/intro.mp4"
+                src="assets/videos/jeffrey-epstein-filthy-rich-official-trailer-netflix.mp4"
                 autoplay
-                muted
                 loop
                 playsinline
-                preload="metadata"
+                preload="auto"
                 aria-label="Jeffrey Epstein: Filthy Rich trailer"
             ></video>
 
             <div class="hero-shade" aria-hidden="true"></div>
 
             <section class="hero-content">
-                <p class="brand-mark">NETFLIX</p>
+                <img
+                    src="assets/icons/netflix-logo-clean.png"
+                    class="brand-mark-image"
+                    alt="Netflix"
+                />
                 <h1
                     id="heroTitle"
                     tabindex="0"
@@ -163,9 +160,24 @@
                     </button>
                     <button id="heroInfo" class="cta cta-info" type="button">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path
-                                d="M12 2a10 10 0 1 0 10 10A10.01 10.01 0 0 0 12 2Zm1 15h-2v-6h2Zm-1-8.2a1.2 1.2 0 1 1 1.2-1.2A1.2 1.2 0 0 1 12 8.8Z"
+                            <circle
+                                cx="12"
+                                cy="12"
+                                r="9.25"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2.2"
                             />
+                            <line
+                                x1="12"
+                                y1="10.5"
+                                x2="12"
+                                y2="16.25"
+                                stroke="currentColor"
+                                stroke-width="2.2"
+                                stroke-linecap="round"
+                            />
+                            <circle cx="12" cy="7.5" r="1.25" />
                         </svg>
                         More Info
                     </button>

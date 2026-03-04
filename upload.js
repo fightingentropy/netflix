@@ -18,6 +18,16 @@ const selectedMediaMeta = document.getElementById("selectedMediaMeta");
 const selectedMediaPlan = document.getElementById("selectedMediaPlan");
 const changeFileButton = document.getElementById("changeFileButton");
 const processingTimeline = document.getElementById("processingTimeline");
+const seriesTitleFieldLabel = document.getElementById("seriesTitleFieldLabel");
+const seasonNumberFieldLabel = document.getElementById(
+  "seasonNumberFieldLabel",
+);
+const episodeNumberFieldLabel = document.getElementById(
+  "episodeNumberFieldLabel",
+);
+const episodeTitleFieldLabel = document.getElementById(
+  "episodeTitleFieldLabel",
+);
 
 let selectedFile = null;
 let pendingCompatibilityWarning = "";
@@ -418,21 +428,89 @@ function setUploadBusyState(isBusy) {
   }
 }
 
+function normalizeContentType(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "episode" || normalized === "course") {
+    return normalized;
+  }
+  return "movie";
+}
+
+function setInputPlaceholderForContentType(input, contentType) {
+  if (!(input instanceof HTMLInputElement)) {
+    return;
+  }
+  const seriesPlaceholder = String(input.dataset.seriesPlaceholder || "").trim();
+  const coursePlaceholder = String(input.dataset.coursePlaceholder || "").trim();
+  if (contentType === "course" && coursePlaceholder) {
+    input.placeholder = coursePlaceholder;
+    return;
+  }
+  if (seriesPlaceholder) {
+    input.placeholder = seriesPlaceholder;
+  }
+}
+
+function updateSeriesFieldCopy(contentType) {
+  const isCourse = contentType === "course";
+  if (seriesTitleFieldLabel) {
+    seriesTitleFieldLabel.textContent = isCourse ? "Course Title" : "Series Title";
+  }
+  if (seasonNumberFieldLabel) {
+    seasonNumberFieldLabel.textContent = isCourse ? "Module" : "Season";
+  }
+  if (episodeNumberFieldLabel) {
+    episodeNumberFieldLabel.textContent = isCourse ? "Lesson" : "Episode";
+  }
+  if (episodeTitleFieldLabel) {
+    episodeTitleFieldLabel.textContent = isCourse
+      ? "Lesson Title"
+      : "Episode Title";
+  }
+
+  const seriesTitleInput = uploadForm?.elements?.namedItem("seriesTitle");
+  const episodeTitleInput = uploadForm?.elements?.namedItem("episodeTitle");
+  setInputPlaceholderForContentType(seriesTitleInput, contentType);
+  setInputPlaceholderForContentType(episodeTitleInput, contentType);
+}
+
 function getSelectedContentType() {
   const selected = uploadForm.querySelector(
     'input[name="contentType"]:checked',
   );
-  return String(selected?.value || "movie").toLowerCase();
+  return normalizeContentType(selected?.value || "movie");
 }
 
 function updateFormForContentType() {
-  const isEpisode = getSelectedContentType() === "episode";
+  const contentType = getSelectedContentType();
+  const isSeriesLike = contentType === "episode" || contentType === "course";
   document.querySelectorAll(".movie-only").forEach((node) => {
-    node.hidden = isEpisode;
+    node.hidden = isSeriesLike;
   });
   document.querySelectorAll(".episode-only").forEach((node) => {
-    node.hidden = !isEpisode;
+    node.hidden = !isSeriesLike;
   });
+  if (contentType === "course") {
+    const tmdbField = uploadForm?.elements?.namedItem("tmdbId");
+    if (tmdbField instanceof HTMLInputElement) {
+      tmdbField.value = "";
+    }
+  }
+  if (isSeriesLike) {
+    const titleField = uploadForm?.elements?.namedItem("title");
+    const seriesTitleField = uploadForm?.elements?.namedItem("seriesTitle");
+    if (
+      titleField instanceof HTMLInputElement &&
+      seriesTitleField instanceof HTMLInputElement &&
+      !String(seriesTitleField.value || "").trim() &&
+      String(titleField.value || "").trim()
+    ) {
+      seriesTitleField.value = String(titleField.value || "").trim();
+    }
+  }
+  updateSeriesFieldCopy(contentType);
 }
 
 function selectFile(file) {
@@ -648,22 +726,24 @@ uploadForm?.addEventListener("submit", async (event) => {
 
 function readUploadMetadataFromForm() {
   const formData = new FormData(uploadForm);
-  const contentType = String(formData.get("contentType") || "movie")
-    .trim()
-    .toLowerCase();
+  const contentType = normalizeContentType(formData.get("contentType"));
   const transcodeAudioToAac = getTranscodeAudioSetting();
-  const isEpisode = contentType === "episode";
+  const isSeriesLike = contentType === "episode" || contentType === "course";
   return {
     contentType,
-    title: isEpisode ? "" : String(formData.get("title") || ""),
-    year: isEpisode ? "" : String(formData.get("year") || ""),
+    title: isSeriesLike ? "" : String(formData.get("title") || ""),
+    year: isSeriesLike ? "" : String(formData.get("year") || ""),
     description: String(formData.get("description") || ""),
     thumb: String(formData.get("thumb") || ""),
     tmdbId: String(formData.get("tmdbId") || ""),
-    seriesTitle: isEpisode ? String(formData.get("seriesTitle") || "") : "",
-    seasonNumber: isEpisode ? Number(formData.get("seasonNumber") || 1) : 1,
-    episodeNumber: isEpisode ? Number(formData.get("episodeNumber") || 1) : 1,
-    episodeTitle: isEpisode ? String(formData.get("episodeTitle") || "") : "",
+    seriesTitle: isSeriesLike ? String(formData.get("seriesTitle") || "") : "",
+    seasonNumber: isSeriesLike ? Number(formData.get("seasonNumber") || 1) : 1,
+    episodeNumber: isSeriesLike
+      ? Number(formData.get("episodeNumber") || 1)
+      : 1,
+    episodeTitle: isSeriesLike
+      ? String(formData.get("episodeTitle") || "")
+      : "",
     transcodeAudioToAac,
   };
 }
@@ -785,8 +865,7 @@ async function uploadViaChunkSession(file) {
 }
 
 function setContentType(type) {
-  const normalized =
-    String(type || "").toLowerCase() === "episode" ? "episode" : "movie";
+  const normalized = normalizeContentType(type);
   const target = uploadForm.querySelector(
     `input[name="contentType"][value="${normalized}"]`,
   );
@@ -813,7 +892,7 @@ async function inferAndPopulateMetadata(file) {
 
   setStatus(
     withCompatibilityWarning(
-      "Inferring title and episode info from filename...",
+      "Inferring title and movie/series/course info from filename...",
     ),
     pendingCompatibilityWarning ? "warning" : "",
   );
@@ -841,7 +920,8 @@ async function inferAndPopulateMetadata(file) {
     setFormValue("year", inferred.year || "");
     setFormValue("tmdbId", inferred.tmdbId || "");
 
-    if (String(inferred.contentType || "").toLowerCase() === "episode") {
+    const inferredContentType = normalizeContentType(inferred.contentType);
+    if (inferredContentType === "episode" || inferredContentType === "course") {
       setFormValue("seriesTitle", inferred.seriesTitle || inferred.title || "");
       setFormValue("seasonNumber", inferred.seasonNumber || 1);
       setFormValue("episodeNumber", inferred.episodeNumber || 1);

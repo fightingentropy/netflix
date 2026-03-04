@@ -6,6 +6,13 @@
     --text: #f5f5f5;
     --muted: #a8a8a8;
     --accent: #e50914;
+    --font-netflix-sans:
+        "Netflix Sans",
+        "Helvetica Neue",
+        "Segoe UI",
+        Roboto,
+        Ubuntu,
+        sans-serif;
 }
 
 * {
@@ -19,7 +26,7 @@
 body {
     margin: 0;
     min-height: 100vh;
-    font-family: Archivo, "Segoe UI", sans-serif;
+    font-family: var(--font-netflix-sans);
     background: radial-gradient(circle at 15% 10%, #2a1212, var(--bg) 45%);
     color: var(--text);
 }

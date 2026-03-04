@@ -5,6 +5,13 @@
   --line: rgba(255, 255, 255, 0.16);
   --panel: rgba(20, 22, 28, 0.92);
   --accent: #e50914;
+  --font-netflix-sans:
+    "Netflix Sans",
+    "Helvetica Neue",
+    "Segoe UI",
+    Roboto,
+    Ubuntu,
+    sans-serif;
 }
 
 * {
@@ -17,7 +24,7 @@ body {
   min-height: 100%;
   background: radial-gradient(circle at 22% 8%, rgba(229, 9, 20, 0.2), transparent 46%), var(--page-bg);
   color: var(--text);
-  font-family: "Archivo", sans-serif;
+  font-family: var(--font-netflix-sans);
 }
 
 .settings-page {

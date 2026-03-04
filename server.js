@@ -487,7 +487,10 @@ function normalizeUploadContentType(value) {
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  return normalized === "episode" ? "episode" : "movie";
+  if (normalized === "episode" || normalized === "course") {
+    return normalized;
+  }
+  return "movie";
 }
 
 function normalizeUploadEpisodeOrdinal(value, fallback = 1) {
@@ -523,7 +526,11 @@ function normalizeLocalMovieEntry(entry) {
   };
 }
 
-function normalizeLocalSeriesEpisodeEntry(entry, fallbackIndex = 0) {
+function normalizeLocalSeriesEpisodeEntry(
+  entry,
+  fallbackIndex = 0,
+  fallbackContentKind = "series",
+) {
   if (!entry || typeof entry !== "object") {
     return null;
   }
@@ -531,15 +538,23 @@ function normalizeLocalSeriesEpisodeEntry(entry, fallbackIndex = 0) {
   if (!src) {
     return null;
   }
+  const contentKind =
+    String(entry.contentKind || fallbackContentKind || "")
+      .trim()
+      .toLowerCase() === "course"
+      ? "course"
+      : "series";
   const episodeNumber = normalizeUploadEpisodeOrdinal(
     entry.episodeNumber || fallbackIndex + 1,
     fallbackIndex + 1,
   );
+  const fallbackTitlePrefix = contentKind === "course" ? "Lesson" : "Episode";
   return {
-    title: normalizeWhitespace(entry.title || `Episode ${episodeNumber}`),
+    title: normalizeWhitespace(entry.title || `${fallbackTitlePrefix} ${episodeNumber}`),
     description: normalizeWhitespace(entry.description || ""),
     thumb: normalizeWhitespace(entry.thumb || "assets/images/thumbnail.jpg"),
     src,
+    contentKind,
     seasonNumber: normalizeUploadEpisodeOrdinal(entry.seasonNumber || 1, 1),
     episodeNumber,
     uploadedAt: Number.isFinite(Number(entry.uploadedAt))
@@ -557,10 +572,20 @@ function normalizeLocalSeriesEntry(entry) {
   if (!id || !title) {
     return null;
   }
+  const inferredContentKindFromText = /\bcourse\b/i.test(
+    `${id} ${title}`.trim(),
+  );
+  const contentKind =
+    String(entry.contentKind || "")
+      .trim()
+      .toLowerCase() === "course" ||
+    inferredContentKindFromText
+      ? "course"
+      : "series";
   const episodes = Array.isArray(entry.episodes)
     ? entry.episodes
         .map((episode, index) =>
-          normalizeLocalSeriesEpisodeEntry(episode, index),
+          normalizeLocalSeriesEpisodeEntry(episode, index, contentKind),
         )
         .filter(Boolean)
     : [];
@@ -579,6 +604,7 @@ function normalizeLocalSeriesEntry(entry) {
   return {
     id,
     title,
+    contentKind,
     tmdbId: /^\d+$/.test(String(entry.tmdbId || "").trim())
       ? String(entry.tmdbId).trim()
       : "",
@@ -657,6 +683,12 @@ function inferUploadMetadataFromFilenameHeuristic(fileName) {
   const episodeMatch =
     /\bS(\d{1,2})E(\d{1,3})\b/i.exec(rawBase) ||
     /\b(\d{1,2})x(\d{1,3})\b/i.exec(rawBase);
+  const hasCourseKeyword = /\b(course|lesson|module|class|lecture|webinar)\b/i.test(
+    rawBase,
+  );
+  const moduleMatch = /\bmodule[\s._-]*0*(\d{1,3})\b/i.exec(rawBase);
+  const lessonMatch =
+    /\b(lesson|class|lecture|webinar)[\s._-]*0*(\d{1,3})\b/i.exec(rawBase);
   const yearMatch = /\b(19\d{2}|20\d{2})\b/.exec(rawBase);
   const year = normalizeYear(yearMatch?.[1] || "");
 
@@ -675,6 +707,41 @@ function inferUploadMetadataFromFilenameHeuristic(fileName) {
       year,
       confidence: 0.6,
       reason: "Heuristic SxxExx filename match.",
+    });
+  }
+
+  if (hasCourseKeyword) {
+    const rawTitle = titleFromFilenameToken(rawBase);
+    const lessonNumber = normalizeUploadEpisodeOrdinal(
+      lessonMatch?.[2] || moduleMatch?.[1] || 1,
+      1,
+    );
+    const moduleNumber = normalizeUploadEpisodeOrdinal(moduleMatch?.[1] || 1, 1);
+    const strippedForCourseTitle = rawBase
+      .replace(/\bmodule[\s._-]*\d{1,3}\b/gi, " ")
+      .replace(
+        /\b(lesson|class|lecture|webinar)[\s._-]*\d{1,3}\b/gi,
+        " ",
+      );
+    const courseTitle =
+      titleFromFilenameToken(strippedForCourseTitle) ||
+      rawTitle ||
+      cleaned;
+    const normalizedCourseTitle = courseTitle || rawTitle || "Untitled Course";
+    const normalizedLessonTitle =
+      rawTitle && rawTitle.toLowerCase() !== normalizedCourseTitle.toLowerCase()
+        ? rawTitle
+        : `Lesson ${lessonNumber}`;
+    return normalizeInferredUploadMetadata({
+      contentType: "course",
+      title: normalizedCourseTitle,
+      seriesTitle: normalizedCourseTitle,
+      seasonNumber: moduleNumber,
+      episodeNumber: lessonNumber,
+      episodeTitle: normalizedLessonTitle,
+      year,
+      confidence: 0.55,
+      reason: "Heuristic course filename match.",
     });
   }
 
@@ -800,6 +867,8 @@ async function keepPreferredAudioTrackWithVideoCopy(
 
 function normalizeInferredUploadMetadata(value = {}) {
   const contentType = normalizeUploadContentType(value.contentType);
+  const isSeriesLike = contentType === "episode" || contentType === "course";
+  const fallbackEpisodeLabel = contentType === "course" ? "Lesson" : "Episode";
   const inferred = {
     contentType,
     confidence: Number.isFinite(Number(value.confidence))
@@ -817,7 +886,7 @@ function normalizeInferredUploadMetadata(value = {}) {
     reason: normalizeWhitespace(value.reason || ""),
   };
 
-  if (contentType === "episode") {
+  if (isSeriesLike) {
     inferred.seriesTitle = normalizeWhitespace(value.seriesTitle || "");
     inferred.seasonNumber = normalizeUploadEpisodeOrdinal(
       value.seasonNumber || 1,
@@ -827,7 +896,9 @@ function normalizeInferredUploadMetadata(value = {}) {
       value.episodeNumber || 1,
       1,
     );
-    inferred.episodeTitle = normalizeWhitespace(value.episodeTitle || "");
+    inferred.episodeTitle =
+      normalizeWhitespace(value.episodeTitle || "") ||
+      `${fallbackEpisodeLabel} ${inferred.episodeNumber}`;
   }
 
   return inferred;
@@ -897,12 +968,25 @@ async function enrichInferenceWithTmdb(baseInference, fileName = "") {
   const inferred = normalizeInferredUploadMetadata(baseInference);
   const episodePattern = extractEpisodePatternFromFilename(fileName);
   if (episodePattern) {
-    inferred.contentType = "episode";
+    if (inferred.contentType !== "course") {
+      inferred.contentType = "episode";
+    }
     inferred.seriesTitle =
       normalizeWhitespace(inferred.seriesTitle || inferred.title || "") ||
       episodePattern.seriesTitle;
     inferred.seasonNumber = episodePattern.seasonNumber;
     inferred.episodeNumber = episodePattern.episodeNumber;
+    if (!normalizeWhitespace(inferred.episodeTitle || "")) {
+      inferred.episodeTitle =
+        inferred.contentType === "course"
+          ? `Lesson ${inferred.episodeNumber}`
+          : `Episode ${inferred.episodeNumber}`;
+    }
+  }
+
+  if (inferred.contentType === "course") {
+    inferred.tmdbId = "";
+    return inferred;
   }
 
   if (!TMDB_API_KEY) {
@@ -1196,7 +1280,7 @@ async function requestOpenAiResponsesInference(prompt, schema) {
         {
           role: "system",
           content:
-            "You infer movie/episode metadata from filenames and respond in strict JSON.",
+            "You infer movie/episode/course metadata from filenames and respond in strict JSON.",
         },
         {
           role: "user",
@@ -1232,17 +1316,18 @@ async function requestOpenAiResponsesInference(prompt, schema) {
 async function inferUploadMetadataWithCodex(fileName) {
   const prompt = `Infer media metadata from this filename only: "${String(fileName || "").trim()}".
 Return JSON with:
-- contentType: "movie" or "episode"
+- contentType: "movie", "episode", or "course"
 - title
 - year (4 digits or empty string)
-- seriesTitle (for episode)
-- seasonNumber (for episode)
-- episodeNumber (for episode)
-- episodeTitle (for episode)
+- seriesTitle (for episode/course)
+- seasonNumber (for episode/course)
+- episodeNumber (for episode/course)
+- episodeTitle (for episode/course)
 - confidence (0 to 1)
 - reason (short)
 Rules:
 - If SxxExx pattern exists, classify as episode.
+- If filename contains course-learning words like course/lesson/module/class/webinar, prefer course.
 - If uncertain, prefer movie.
 - Keep fields empty instead of guessing hard.`;
 
@@ -1252,7 +1337,7 @@ Rules:
     properties: {
       contentType: {
         type: "string",
-        enum: ["movie", "episode"],
+        enum: ["movie", "episode", "course"],
       },
       title: { type: "string" },
       year: { type: "string" },
@@ -1295,7 +1380,9 @@ Rules:
   const normalized = normalizeInferredUploadMetadata(parsed);
   const episodePattern = extractEpisodePatternFromFilename(fileName);
   if (episodePattern) {
-    normalized.contentType = "episode";
+    if (normalized.contentType !== "course") {
+      normalized.contentType = "episode";
+    }
     normalized.seriesTitle =
       normalizeWhitespace(normalized.seriesTitle || normalized.title || "") ||
       episodePattern.seriesTitle;
@@ -1312,6 +1399,10 @@ function buildUploadMovieId(title) {
 
 function buildUploadSeriesId(value) {
   return `local-series-${slugify(value, "series")}`;
+}
+
+function buildUploadCourseId(value) {
+  return `local-course-${slugify(value, "course")}`;
 }
 
 function buildUniqueMp4Filename(baseLabel) {
@@ -1385,9 +1476,7 @@ function buildUploadMetadataFromObject(payload = {}) {
       .trim()
       .toLowerCase() === "on";
   return {
-    contentType: String(payload?.contentType || "movie")
-      .trim()
-      .toLowerCase(),
+    contentType: normalizeUploadContentType(payload?.contentType || "movie"),
     title: normalizeWhitespace(payload?.title || ""),
     year: normalizeYear(payload?.year || ""),
     description: normalizeWhitespace(payload?.description || ""),
@@ -1559,12 +1648,16 @@ async function processUploadedMediaIntoLibrary({
     throw new Error("Only .mp4 and .mkv files are supported.");
   }
 
-  const contentType = String(metadata?.contentType || "movie")
-    .trim()
-    .toLowerCase();
-  if (contentType !== "movie" && contentType !== "episode") {
-    throw new Error("Invalid contentType. Use movie or episode.");
+  const contentType = normalizeUploadContentType(metadata?.contentType || "movie");
+  if (
+    contentType !== "movie" &&
+    contentType !== "episode" &&
+    contentType !== "course"
+  ) {
+    throw new Error("Invalid contentType. Use movie, episode, or course.");
   }
+  const isMovieContent = contentType === "movie";
+  const isCourseContent = contentType === "course";
 
   const movieTitle =
     metadata?.title ||
@@ -1574,9 +1667,10 @@ async function processUploadedMediaIntoLibrary({
   const thumb = normalizeWhitespace(
     metadata?.thumb || "assets/images/thumbnail.jpg",
   );
-  const tmdbId = String(metadata?.tmdbId || "")
+  const rawTmdbId = String(metadata?.tmdbId || "")
     .trim()
     .replace(/[^\d]/g, "");
+  const tmdbId = isCourseContent ? "" : rawTmdbId;
   const seasonNumber = normalizeUploadEpisodeOrdinal(
     metadata?.seasonNumber || 1,
     1,
@@ -1587,13 +1681,13 @@ async function processUploadedMediaIntoLibrary({
   );
   const episodeTitle =
     normalizeWhitespace(metadata?.episodeTitle || "") ||
-    `Episode ${episodeNumber}`;
+    `${isCourseContent ? "Lesson" : "Episode"} ${episodeNumber}`;
   const seriesTitle = normalizeWhitespace(metadata?.seriesTitle || "");
   const rawSeriesId = normalizeWhitespace(metadata?.seriesId || "");
   const seriesId = rawSeriesId || seriesTitle || movieTitle;
 
   await ensureUploadDirectories();
-  const uploadBaseName = contentType === "movie" ? movieTitle : episodeTitle;
+  const uploadBaseName = isMovieContent ? movieTitle : episodeTitle;
   let outputFileName = buildUniqueMp4Filename(uploadBaseName || sourceName);
   let outputPath = join(VIDEOS_DIR, outputFileName);
   let convertedFromMkv = false;
@@ -1682,7 +1776,7 @@ async function processUploadedMediaIntoLibrary({
 
   const library = await readLocalLibrary();
 
-  if (contentType === "movie") {
+  if (isMovieContent) {
     const entry = normalizeLocalMovieEntry({
       id: buildUploadMovieId(movieTitle),
       title: movieTitle || "Untitled Movie",
@@ -1739,11 +1833,19 @@ async function processUploadedMediaIntoLibrary({
     };
   }
 
-  const safeSeriesTitle = seriesTitle || "Untitled Series";
-  const normalizedSeriesId = buildUploadSeriesId(seriesId || safeSeriesTitle);
+  const seriesContentKind = isCourseContent ? "course" : "series";
+  const safeSeriesTitle =
+    seriesTitle ||
+    (isCourseContent
+      ? movieTitle || "Untitled Course"
+      : "Untitled Series");
+  const normalizedSeriesId = isCourseContent
+    ? buildUploadCourseId(seriesId || safeSeriesTitle)
+    : buildUploadSeriesId(seriesId || safeSeriesTitle);
   const nextSeries = normalizeLocalSeriesEntry({
     id: normalizedSeriesId,
     title: safeSeriesTitle,
+    contentKind: seriesContentKind,
     tmdbId,
     year,
     episodes: [],
@@ -1751,6 +1853,7 @@ async function processUploadedMediaIntoLibrary({
   const seriesRecord = nextSeries || {
     id: normalizedSeriesId,
     title: safeSeriesTitle,
+    contentKind: seriesContentKind,
     tmdbId: /^\d+$/.test(tmdbId) ? tmdbId : "",
     year,
     preferredContainer: "mp4",
@@ -1764,11 +1867,13 @@ async function processUploadedMediaIntoLibrary({
       description,
       thumb,
       src: sourcePath,
+      contentKind: seriesContentKind,
       seasonNumber,
       episodeNumber,
       uploadedAt: Date.now(),
     },
     episodeNumber - 1,
+    seriesContentKind,
   );
   if (!episodeEntry) {
     await removeFileIfPresent(outputPath);
@@ -1788,6 +1893,7 @@ async function processUploadedMediaIntoLibrary({
       : {
           id: normalizedSeriesId,
           title: safeSeriesTitle,
+          contentKind: seriesContentKind,
           tmdbId: seriesRecord.tmdbId || "",
           year: seriesRecord.year || "",
           preferredContainer: "mp4",
@@ -1803,6 +1909,12 @@ async function processUploadedMediaIntoLibrary({
       ? String(targetSeries.tmdbId || "").trim()
       : seriesRecord.tmdbId || "";
   targetSeries.year = normalizeYear(targetSeries.year || year);
+  targetSeries.contentKind =
+    String(targetSeries.contentKind || seriesContentKind)
+      .trim()
+      .toLowerCase() === "course"
+      ? "course"
+      : "series";
   targetSeries.preferredContainer = "mp4";
   targetSeries.requiresLocalEpisodeSources = true;
 
@@ -1834,7 +1946,13 @@ async function processUploadedMediaIntoLibrary({
     );
   });
   targetSeries.episodes = filteredEpisodes
-    .map((entry, index) => normalizeLocalSeriesEpisodeEntry(entry, index))
+    .map((entry, index) =>
+      normalizeLocalSeriesEpisodeEntry(
+        entry,
+        index,
+        targetSeries.contentKind || seriesContentKind,
+      ),
+    )
     .filter(Boolean);
 
   if (existingIndex >= 0) {
@@ -1847,7 +1965,7 @@ async function processUploadedMediaIntoLibrary({
 
   return {
     ok: true,
-    contentType: "episode",
+    contentType: isCourseContent ? "course" : "episode",
     series: targetSeries,
     episode: episodeEntry,
     convertedFromMkv,
