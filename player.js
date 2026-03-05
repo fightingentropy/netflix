@@ -79,6 +79,9 @@ let nativePlaybackLaunched = false;
 let activeAudioTab = "subtitles";
 let seriesEpisodeThumbHydrationTask = null;
 let hasHydratedSeriesEpisodeThumbs = false;
+let hasQueuedGallerySave = false;
+const sourceSaveStateByHash = new Map();
+const sourceSaveResetTimeoutByHash = new Map();
 
 const params = new URLSearchParams(window.location.search);
 const DEFAULT_TRAILER_SOURCE =
@@ -448,6 +451,51 @@ const SERIES_LIBRARY = Object.freeze({
     await fetchLocalSeriesLibrary(),
   ),
 });
+const rawSourceParam = String(params.get("src") || "").trim();
+const normalizedRawSourceParam = rawSourceParam.startsWith("assets/")
+  ? `/${rawSourceParam}`
+  : rawSourceParam;
+
+function normalizeSeriesSourceLookupValue(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  const prefixed = normalized.startsWith("assets/")
+    ? `/${normalized}`
+    : normalized;
+  return prefixed.replace(/^\/+/, "").toLowerCase();
+}
+
+function inferSeriesPlaybackFromSource(sourceValue) {
+  const normalizedSource = normalizeSeriesSourceLookupValue(sourceValue);
+  if (!normalizedSource) {
+    return null;
+  }
+  const entries = Object.entries(SERIES_LIBRARY || {});
+  for (const [seriesId, seriesEntry] of entries) {
+    const episodes = Array.isArray(seriesEntry?.episodes)
+      ? seriesEntry.episodes
+      : [];
+    for (let index = 0; index < episodes.length; index += 1) {
+      const candidateSource = normalizeSeriesSourceLookupValue(episodes[index]?.src);
+      if (!candidateSource) {
+        continue;
+      }
+      if (candidateSource === normalizedSource) {
+        return {
+          seriesId: String(seriesId || "")
+            .trim()
+            .toLowerCase(),
+          series: seriesEntry,
+          episodeIndex: index,
+        };
+      }
+    }
+  }
+  return null;
+}
+
 const mediaTypeParam = String(params.get("mediaType") || "")
   .trim()
   .toLowerCase();
@@ -457,43 +505,51 @@ const requestedSeriesId = String(params.get("seriesId") || "")
   .toLowerCase();
 const hasRequestedEpisodeIndexParam = params.has("episodeIndex");
 const requestedEpisodeIndex = Number(params.get("episodeIndex") || 0);
-const activeSeries =
+const explicitSeriesPlayback =
   isExplicitTvPlayback &&
   Object.prototype.hasOwnProperty.call(SERIES_LIBRARY, requestedSeriesId)
-    ? SERIES_LIBRARY[requestedSeriesId]
+    ? {
+        seriesId: requestedSeriesId,
+        series: SERIES_LIBRARY[requestedSeriesId],
+        episodeIndex: 0,
+      }
     : null;
+const inferredSeriesPlayback = inferSeriesPlaybackFromSource(
+  normalizedRawSourceParam,
+);
+const activeSeriesMatch = explicitSeriesPlayback || inferredSeriesPlayback;
+const activeSeries = activeSeriesMatch?.series || null;
 const seriesEpisodes = Array.isArray(activeSeries?.episodes)
   ? activeSeries.episodes
   : [];
+const selectedSeriesEpisodeIndex = hasRequestedEpisodeIndexParam
+  ? requestedEpisodeIndex
+  : Number(activeSeriesMatch?.episodeIndex || 0);
 const seriesEpisodeIndex = seriesEpisodes.length
   ? Math.max(
       0,
       Math.min(
         seriesEpisodes.length - 1,
-        Number.isFinite(requestedEpisodeIndex)
-          ? Math.floor(requestedEpisodeIndex)
+        Number.isFinite(selectedSeriesEpisodeIndex)
+          ? Math.floor(selectedSeriesEpisodeIndex)
           : 0,
       ),
     )
   : -1;
 const activeSeriesEpisode =
   seriesEpisodeIndex >= 0 ? seriesEpisodes[seriesEpisodeIndex] : null;
-const isSeriesPlayback = isExplicitTvPlayback && Boolean(activeSeriesEpisode);
+const isSeriesPlayback = Boolean(
+  activeSeriesEpisode && (isExplicitTvPlayback || inferredSeriesPlayback),
+);
 const hasSeriesEpisodeControls =
-  isExplicitTvPlayback &&
-  hasRequestedEpisodeIndexParam &&
-  Boolean(activeSeries && seriesEpisodes.length > 1);
-const rawSourceParam = String(params.get("src") || "").trim();
-const normalizedRawSourceParam = rawSourceParam.startsWith("assets/")
-  ? `/${rawSourceParam}`
-  : rawSourceParam;
+  isSeriesPlayback && Boolean(activeSeries && seriesEpisodes.length > 1);
 const rawSeriesSourceParam = String(activeSeriesEpisode?.src || "").trim();
 const normalizedSeriesSourceParam = rawSeriesSourceParam.startsWith("assets/")
   ? `/${rawSeriesSourceParam}`
   : rawSeriesSourceParam;
 const thumbParam = String(params.get("thumb") || "").trim();
 const src = isSeriesPlayback
-  ? normalizedSeriesSourceParam
+  ? normalizedSeriesSourceParam || normalizedRawSourceParam
   : normalizedRawSourceParam;
 const fallbackSeasonNumber = Number(
   params.get("seasonNumber") || params.get("season") || 1,
@@ -549,6 +605,12 @@ const subtitleLangParam = (params.get("subtitleLang") || "")
   .trim()
   .toLowerCase();
 const sourceHashParam = (params.get("sourceHash") || "").trim().toLowerCase();
+const saveToGalleryParam = (params.get("saveToGallery") || "")
+  .trim()
+  .toLowerCase();
+const shouldSaveToGallery = new Set(["1", "true", "yes", "on"]).has(
+  saveToGalleryParam,
+);
 const hasExplicitSource = Boolean(src);
 const isExplicitLocalUploadSource = Boolean(
   hasExplicitSource &&
@@ -626,8 +688,8 @@ const SOURCE_LANGUAGE_TOKENS = {
   it: ["italian", " italiano", " ita "],
   pt: ["portuguese", " portugues", " por ", " pt-br ", " brazilian "],
 };
-const AUDIO_SYNC_MIN_MS = -1500;
-const AUDIO_SYNC_MAX_MS = 1500;
+const AUDIO_SYNC_MIN_MS = -2500;
+const AUDIO_SYNC_MAX_MS = 2500;
 const AUDIO_SYNC_STEP_MS = 50;
 const RESUME_SAVE_MIN_INTERVAL_MS = 3000;
 const RESUME_SAVE_MIN_DELTA_SECONDS = 1.5;
@@ -1915,6 +1977,92 @@ function getSourceOptionByHash(sourceHash) {
   );
 }
 
+function getSourceSaveState(sourceHash = "") {
+  const normalizedHash = normalizeSourceHash(sourceHash);
+  if (!normalizedHash) {
+    return "idle";
+  }
+  return sourceSaveStateByHash.get(normalizedHash) || "idle";
+}
+
+function applySourceSaveButtonState(button, state = "idle") {
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  if (state === "saving") {
+    button.textContent = "Saving...";
+    button.disabled = true;
+  } else if (state === "saved") {
+    button.textContent = "Saved";
+    button.disabled = true;
+  } else if (state === "error") {
+    button.textContent = "Retry";
+    button.disabled = false;
+  } else {
+    button.textContent = "Save";
+    button.disabled = false;
+  }
+  button.dataset.saveState = state;
+}
+
+function syncSourceSaveButtonsForHash(sourceHash = "") {
+  if (!(sourceOptionsContainer instanceof HTMLElement)) {
+    return;
+  }
+  const normalizedHash = normalizeSourceHash(sourceHash);
+  if (!normalizedHash) {
+    return;
+  }
+  const nextState = getSourceSaveState(normalizedHash);
+  const saveButtons = Array.from(
+    sourceOptionsContainer.querySelectorAll(
+      `.source-save-button[data-source-hash="${normalizedHash}"]`,
+    ),
+  );
+  saveButtons.forEach((saveButton) => {
+    applySourceSaveButtonState(saveButton, nextState);
+  });
+}
+
+function setSourceSaveState(sourceHash = "", state = "idle") {
+  const normalizedHash = normalizeSourceHash(sourceHash);
+  if (!normalizedHash) {
+    return;
+  }
+  if (state !== "error") {
+    const existingTimeout = sourceSaveResetTimeoutByHash.get(normalizedHash);
+    if (existingTimeout) {
+      window.clearTimeout(existingTimeout);
+      sourceSaveResetTimeoutByHash.delete(normalizedHash);
+    }
+  }
+  if (state === "idle") {
+    sourceSaveStateByHash.delete(normalizedHash);
+  } else {
+    sourceSaveStateByHash.set(normalizedHash, state);
+  }
+  syncSourceSaveButtonsForHash(normalizedHash);
+}
+
+function scheduleSourceSaveRetryReset(sourceHash = "", delayMs = 2200) {
+  const normalizedHash = normalizeSourceHash(sourceHash);
+  if (!normalizedHash) {
+    return;
+  }
+  const existingTimeout = sourceSaveResetTimeoutByHash.get(normalizedHash);
+  if (existingTimeout) {
+    window.clearTimeout(existingTimeout);
+  }
+  const timeoutId = window.setTimeout(() => {
+    sourceSaveResetTimeoutByHash.delete(normalizedHash);
+    if (getSourceSaveState(normalizedHash) === "error") {
+      setSourceSaveState(normalizedHash, "idle");
+    }
+  }, Math.max(800, Number(delayMs) || 2200));
+  sourceSaveResetTimeoutByHash.set(normalizedHash, timeoutId);
+}
+
 function parseSourceOptionVerticalResolution(option = {}) {
   const labelMatch = String(option?.qualityLabel || "")
     .toLowerCase()
@@ -2186,6 +2334,9 @@ function renderSourceOptionButtons() {
     }
     seenHashes.add(sourceHash);
 
+    const sourceOptionRow = document.createElement("div");
+    sourceOptionRow.className = "source-option-row";
+
     const sourceOptionButton = document.createElement("button");
     sourceOptionButton.className = "audio-option source-option";
     sourceOptionButton.type = "button";
@@ -2218,7 +2369,20 @@ function renderSourceOptionButtons() {
     }
 
     sourceOptionButton.prepend(nameLine);
-    fragment.appendChild(sourceOptionButton);
+    sourceOptionRow.appendChild(sourceOptionButton);
+
+    const sourceSaveButton = document.createElement("button");
+    sourceSaveButton.className = "source-save-button";
+    sourceSaveButton.type = "button";
+    sourceSaveButton.dataset.sourceHash = sourceHash;
+    sourceSaveButton.setAttribute(
+      "aria-label",
+      `Save ${getSourceDisplayName(option)} to gallery`,
+    );
+    applySourceSaveButtonState(sourceSaveButton, getSourceSaveState(sourceHash));
+    sourceOptionRow.appendChild(sourceSaveButton);
+
+    fragment.appendChild(sourceOptionRow);
     displayedSources.push(option);
   }
 
@@ -2534,9 +2698,9 @@ function getSubtitleTrackByStreamIndex(streamIndex) {
 }
 
 function shouldUseNativeEmbeddedSubtitleTrack(track) {
-  // Chromium in this app shell is inconsistent with in-band MP4 subtitle rendering.
-  // Keep external VTT path as the reliable default.
-  return false;
+  // For embedded text subtitles, prefer in-band rendering on current Chromium.
+  // This avoids slow server-side VTT extraction on large remote MP4 files.
+  return Boolean(track && !track.isExternal && track.isTextBased);
 }
 
 function ensureNativeSubtitleTrackVisible() {
@@ -3300,6 +3464,7 @@ async function resolveTmdbSourcesAndPlay({
     renderSourceOptionButtons();
   }
   setTmdbSourceQueue(resolved.playableUrl, resolved.fallbackUrls);
+  void queueGallerySaveIfRequested(resolved);
   const preferredSource = tmdbSourceQueue[0] || resolved.playableUrl;
   if (await tryLaunchNativePlayback(preferredSource, resumeTime)) {
     syncAudioState();
@@ -4415,6 +4580,106 @@ async function requestJson(url, options = {}, timeoutMs = 20000) {
   }
 }
 
+function getGallerySavePlayableCandidates(resolvedPayload = {}) {
+  const rawCandidates = [
+    resolvedPayload?.playableUrl,
+    ...(Array.isArray(resolvedPayload?.fallbackUrls)
+      ? resolvedPayload.fallbackUrls
+      : []),
+  ];
+  return rawCandidates
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index);
+}
+
+function buildGallerySavePayloadTemplate(
+  resolvedPayload = {},
+  { sourceOption = null } = {},
+) {
+  const metadata =
+    resolvedPayload?.metadata && typeof resolvedPayload.metadata === "object"
+      ? resolvedPayload.metadata
+      : {};
+  const optionName = sourceOption
+    ? getSourceDisplayName(sourceOption)
+    : "Stream source";
+  return {
+    tmdbId: String(metadata?.tmdbId || tmdbId || "").trim(),
+    mediaType: String(metadata?.mediaType || mediaType || "movie")
+      .trim()
+      .toLowerCase(),
+    title: String(metadata?.displayTitle || title || "").trim(),
+    year: String(metadata?.displayYear || year || "").trim(),
+    thumb: String(thumbParam || "").trim(),
+    description: "",
+    filename: String(
+      resolvedPayload?.filename || sourceOption?.filename || optionName,
+    ).trim(),
+  };
+}
+
+function isGalleryPlayableCandidateError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    message.includes("playableurl") ||
+    message.includes("real-debrid") ||
+    message.includes("invalid")
+  );
+}
+
+async function queueGallerySaveFromResolvedPayload(
+  resolvedPayload = {},
+  { sourceOption = null } = {},
+) {
+  const playableCandidates = getGallerySavePlayableCandidates(resolvedPayload);
+  if (!playableCandidates.length) {
+    throw new Error("Unable to resolve this source for download.");
+  }
+
+  const payloadTemplate = buildGallerySavePayloadTemplate(resolvedPayload, {
+    sourceOption,
+  });
+  let lastCandidateError = null;
+  for (const playableUrl of playableCandidates) {
+    try {
+      await requestJson("/api/gallery/save-stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...payloadTemplate,
+          playableUrl,
+        }),
+      });
+      return;
+    } catch (error) {
+      lastCandidateError = error;
+      if (!isGalleryPlayableCandidateError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  if (lastCandidateError) {
+    throw lastCandidateError;
+  }
+  throw new Error("Unable to queue this source for gallery save.");
+}
+
+async function queueGallerySaveIfRequested(resolvedPayload = {}) {
+  if (!shouldSaveToGallery || hasQueuedGallerySave || !isTmdbResolvedPlayback) {
+    return;
+  }
+
+  hasQueuedGallerySave = true;
+  try {
+    await queueGallerySaveFromResolvedPayload(resolvedPayload);
+  } catch (error) {
+    hasQueuedGallerySave = false;
+    console.error("Failed to queue gallery save:", error);
+  }
+}
+
 async function resolveExplicitSourceTrackSelection(sourceInput) {
   activeTrackSourceInput = String(sourceInput || "").trim();
   if (!activeTrackSourceInput) {
@@ -4604,6 +4869,53 @@ async function resolveTmdbTvEpisodeViaBackend(
 
     throw lastError;
   }
+}
+
+async function resolveTmdbSourceForGallerySave(sourceHash = "") {
+  const normalizedSourceHash = normalizeSourceHash(sourceHash);
+  if (!normalizedSourceHash || !isTmdbResolvedPlayback || !tmdbId) {
+    throw new Error("Unable to save this source right now.");
+  }
+
+  const query = new URLSearchParams({
+    tmdbId,
+    title,
+    year,
+    audioLang: preferredAudioLang,
+    quality: preferredQuality,
+    sourceHash: normalizedSourceHash,
+  });
+  if (preferredSubtitleLang) {
+    query.set("subtitleLang", preferredSubtitleLang);
+  }
+  if (isTmdbTvPlayback) {
+    query.set("seasonNumber", String(Math.max(1, Math.floor(seasonNumber || 1))));
+    query.set(
+      "episodeNumber",
+      String(Math.max(1, Math.floor(episodeNumber || 1))),
+    );
+    if (preferredContainer) {
+      query.set("preferredContainer", preferredContainer);
+    }
+  }
+  if (preferredSourceMinSeeders > 0) {
+    query.set("minSeeders", String(preferredSourceMinSeeders));
+  }
+  if (
+    preferredSourceFormats.length > 0 &&
+    preferredSourceFormats.length < supportedSourceFormats.length
+  ) {
+    query.set("allowedFormats", preferredSourceFormats.join(","));
+  }
+  query.set("sourceLang", preferredSourceLanguage);
+
+  const endpoint = isTmdbTvPlayback ? "/api/resolve/tv" : "/api/resolve/movie";
+  const resolved = await requestJson(`${endpoint}?${query.toString()}`, {}, 95000);
+  const resolvedSourceHash = normalizeSourceHash(resolved?.sourceHash || "");
+  if (resolvedSourceHash !== normalizedSourceHash) {
+    throw new Error("Selected source is unavailable right now. Try another source.");
+  }
+  return resolved;
 }
 
 async function fetchTmdbSourceOptionsViaBackend() {
@@ -5184,6 +5496,31 @@ async function handleSourceOptionSelection(nextSourceHash) {
   }
 }
 
+async function handleSourceOptionSaveRequest(nextSourceHash) {
+  const normalizedNextSourceHash = normalizeSourceHash(nextSourceHash);
+  if (!normalizedNextSourceHash || !isTmdbResolvedPlayback || isResolvingSource()) {
+    return;
+  }
+
+  const existingState = getSourceSaveState(normalizedNextSourceHash);
+  if (existingState === "saving" || existingState === "saved") {
+    return;
+  }
+
+  setSourceSaveState(normalizedNextSourceHash, "saving");
+  try {
+    const resolved = await resolveTmdbSourceForGallerySave(normalizedNextSourceHash);
+    await queueGallerySaveFromResolvedPayload(resolved, {
+      sourceOption: getSourceOptionByHash(normalizedNextSourceHash),
+    });
+    setSourceSaveState(normalizedNextSourceHash, "saved");
+  } catch (error) {
+    console.error("Failed to queue gallery save for source:", error);
+    setSourceSaveState(normalizedNextSourceHash, "error");
+    scheduleSourceSaveRetryReset(normalizedNextSourceHash);
+  }
+}
+
 audioTabSubtitles?.addEventListener("click", () => {
   if (isResolvingSource()) {
     return;
@@ -5229,6 +5566,14 @@ audioTabSources?.addEventListener("click", () => {
 
 sourceOptionsContainer?.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
+    return;
+  }
+
+  const sourceSaveButton = event.target.closest(".source-save-button");
+  if (sourceSaveButton instanceof HTMLButtonElement) {
+    event.preventDefault();
+    event.stopPropagation();
+    void handleSourceOptionSaveRequest(sourceSaveButton.dataset.sourceHash || "");
     return;
   }
 

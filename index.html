@@ -29,12 +29,52 @@
                         <a href="#">Films</a>
                         <a href="#" class="optional">Games</a>
                         <a href="#" class="optional">New &amp; Popular</a>
-                        <a href="#" class="optional">My List</a>
+                        <a href="#" id="navMyList" class="optional">My List</a>
                         <a href="#" class="optional">Browse by Language</a>
                     </nav>
                 </div>
                 <div class="nav-right">
-                    <button class="icon-btn" aria-label="Search">
+                    <div id="navSearchBox" class="nav-search-box" hidden>
+                        <label class="nav-search-field" for="navSearchInput">
+                            <svg viewBox="0 0 20 20" aria-hidden="true">
+                                <path
+                                    d="M14.33 12.9 19.71 18.28a1 1 0 0 1-1.42 1.42l-5.38-5.38a8 8 0 1 1 1.42-1.42Zm-6.33 1.1a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z"
+                                />
+                            </svg>
+                            <input
+                                id="navSearchInput"
+                                type="search"
+                                inputmode="search"
+                                autocomplete="off"
+                                autocorrect="off"
+                                autocapitalize="off"
+                                spellcheck="false"
+                                placeholder="Titles, people, genres"
+                                aria-label="Search titles, people, genres"
+                            />
+                        </label>
+                        <button
+                            id="closeSearchButton"
+                            class="nav-search-close"
+                            type="button"
+                            aria-label="Close search"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path
+                                    d="m6 6 12 12M18 6 6 18"
+                                    fill="none"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                />
+                            </svg>
+                        </button>
+                    </div>
+                    <button
+                        id="openSearchButton"
+                        class="icon-btn"
+                        aria-label="Search"
+                        aria-expanded="false"
+                    >
                         <svg viewBox="0 0 20 20" aria-hidden="true">
                             <path
                                 d="M14.33 12.9 19.71 18.28a1 1 0 0 1-1.42 1.42l-5.38-5.38a8 8 0 1 1 1.42-1.42Zm-6.33 1.1a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z"
@@ -111,6 +151,17 @@
                     </div>
                 </div>
             </header>
+
+            <section id="searchExperience" class="search-experience" hidden>
+                <p id="searchStatus" class="search-status">
+                    Start typing to search TMDB titles.
+                </p>
+                <div id="searchExplore" class="search-explore" hidden>
+                    <span class="search-explore-label">More to explore:</span>
+                    <div id="searchExploreLinks" class="search-explore-links"></div>
+                </div>
+                <div id="searchResultsGrid" class="search-results-grid"></div>
+            </section>
 
             <video
                 id="introVideo"
@@ -229,6 +280,15 @@
                 <div id="cardsContainer" class="cards popular-cards"></div>
             </div>
         </section>
+        <section id="myListRow" class="popular-row" hidden>
+            <div class="popular-row-inner">
+                <h2>My List</h2>
+                <div id="myListCards" class="cards popular-cards"></div>
+                <p id="myListEmpty" class="continue-empty" hidden>
+                    Add titles using the check icon.
+                </p>
+            </div>
+        </section>
 
         <div id="detailsModal" class="details-modal" hidden>
             <div class="details-backdrop" data-close-modal></div>
@@ -275,6 +335,7 @@
                                 Play
                             </button>
                             <button
+                                id="detailsMyList"
                                 class="details-round"
                                 type="button"
                                 aria-label="Add to my list"
@@ -351,6 +412,77 @@
                     <div id="detailsMoreGrid" class="details-grid"></div>
                 </section>
             </article>
+        </div>
+
+        <div id="libraryEditModal" class="library-edit-modal" hidden>
+            <div class="library-edit-backdrop" data-close-library-edit></div>
+            <article
+                class="library-edit-sheet"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="libraryEditModalTitle"
+            >
+                <button
+                    id="libraryEditClose"
+                    class="library-edit-close"
+                    type="button"
+                    aria-label="Close editor"
+                >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                            d="m6 6 12 12M18 6 6 18"
+                            fill="none"
+                            stroke-linecap="round"
+                        />
+                    </svg>
+                </button>
+                <header class="library-edit-modal-header">
+                    <p class="library-edit-kicker">Library Editor</p>
+                    <h3 id="libraryEditModalTitle">Edit Title</h3>
+                    <p id="libraryEditModalMeta" class="library-edit-modal-meta"></p>
+                </header>
+                <div id="libraryEditFields" class="library-edit-fields"></div>
+                <div class="library-edit-modal-actions">
+                    <button
+                        id="libraryAddEpisodeBtn"
+                        class="library-edit-btn"
+                        type="button"
+                        hidden
+                    >
+                        Add Episode
+                    </button>
+                    <button
+                        id="librarySaveBtn"
+                        class="library-edit-btn library-edit-btn--primary"
+                        type="button"
+                    >
+                        Save Changes
+                    </button>
+                    <button
+                        id="libraryDeleteBtn"
+                        class="library-edit-btn library-edit-btn--danger"
+                        type="button"
+                    >
+                        Delete Title
+                    </button>
+                </div>
+                <p
+                    id="libraryEditModalStatus"
+                    class="library-edit-modal-status"
+                    role="status"
+                    aria-live="polite"
+                ></p>
+            </article>
+        </div>
+
+        <div id="searchContextMenu" class="search-context-menu" hidden>
+            <button
+                id="searchContextSaveButton"
+                class="search-context-menu-item"
+                type="button"
+            >
+                Save to gallery while streaming
+            </button>
         </div>
 
         <script type="module" src="script.js"></script>

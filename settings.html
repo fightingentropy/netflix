@@ -455,6 +455,43 @@
                     </section>
 
                     <section
+                        class="library-edit-section"
+                        aria-labelledby="libraryEditTitle"
+                    >
+                        <div class="library-edit-header">
+                            <h2
+                                id="libraryEditTitle"
+                                class="settings-section-title"
+                            >
+                                Library Edit Mode
+                            </h2>
+                            <label class="library-edit-toggle">
+                                <input
+                                    id="libraryEditModeToggle"
+                                    type="checkbox"
+                                />
+                                <span>Edit mode</span>
+                            </label>
+                        </div>
+                        <p class="library-edit-help">
+                            Enable edit mode to show edit icons on titles, then
+                            update metadata, add episodes to series/courses, or
+                            delete entries.
+                        </p>
+                        <p
+                            id="libraryEditStatus"
+                            class="library-edit-status"
+                            role="status"
+                            aria-live="polite"
+                        ></p>
+                        <div
+                            id="libraryEditList"
+                            class="library-edit-list"
+                            role="list"
+                        ></div>
+                    </section>
+
+                    <section
                         class="maintenance-section"
                         aria-labelledby="maintenanceTitle"
                     >

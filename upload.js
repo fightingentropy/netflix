@@ -28,12 +28,18 @@ const episodeNumberFieldLabel = document.getElementById(
 const episodeTitleFieldLabel = document.getElementById(
   "episodeTitleFieldLabel",
 );
+const uploadSeriesContext = document.getElementById("uploadSeriesContext");
+const uploadSeriesContextTitle = document.getElementById(
+  "uploadSeriesContextTitle",
+);
+const uploadSeriesContextMeta = document.getElementById("uploadSeriesContextMeta");
 
 let selectedFile = null;
 let pendingCompatibilityWarning = "";
 let pendingCanOfferAudioTranscode = false;
 let selectedPreviewRequestVersion = 0;
 let isProcessingUpload = false;
+let activeSeriesUploadContext = null;
 
 function formatBytes(value) {
   const bytes = Number(value) || 0;
@@ -438,6 +444,50 @@ function normalizeContentType(value) {
   return "movie";
 }
 
+function parseSeriesUploadContextFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const mode = String(params.get("mode") || "")
+    .trim()
+    .toLowerCase();
+  if (mode !== "add-episode" && mode !== "series-episode") {
+    return null;
+  }
+
+  const contentType = normalizeContentType(
+    params.get("contentType") || "episode",
+  );
+  if (contentType === "movie") {
+    return null;
+  }
+
+  const seriesId = String(params.get("seriesId") || "").trim();
+  const seriesTitle = String(params.get("seriesTitle") || "").trim();
+  if (!seriesId && !seriesTitle) {
+    return null;
+  }
+  const seasonNumber = Number(params.get("seasonNumber") || 1);
+  const episodeNumber = Number(params.get("episodeNumber") || 1);
+  const defaultEpisodeLabel = contentType === "course" ? "Lesson" : "Episode";
+
+  return {
+    contentType,
+    seriesId,
+    seriesTitle,
+    thumb: String(params.get("thumb") || "").trim(),
+    seasonNumber:
+      Number.isFinite(seasonNumber) && seasonNumber >= 1
+        ? Math.floor(seasonNumber)
+        : 1,
+    episodeNumber:
+      Number.isFinite(episodeNumber) && episodeNumber >= 1
+        ? Math.floor(episodeNumber)
+        : 1,
+    episodeTitle:
+      String(params.get("episodeTitle") || "").trim() ||
+      `${defaultEpisodeLabel} ${Number.isFinite(episodeNumber) && episodeNumber >= 1 ? Math.floor(episodeNumber) : 1}`,
+  };
+}
+
 function setInputPlaceholderForContentType(input, contentType) {
   if (!(input instanceof HTMLInputElement)) {
     return;
@@ -726,23 +776,47 @@ uploadForm?.addEventListener("submit", async (event) => {
 
 function readUploadMetadataFromForm() {
   const formData = new FormData(uploadForm);
-  const contentType = normalizeContentType(formData.get("contentType"));
+  const contextContentType = normalizeContentType(
+    activeSeriesUploadContext?.contentType || "",
+  );
+  const contentType = activeSeriesUploadContext
+    ? contextContentType
+    : normalizeContentType(formData.get("contentType"));
   const transcodeAudioToAac = getTranscodeAudioSetting();
   const isSeriesLike = contentType === "episode" || contentType === "course";
+  const contextSeriesId = String(activeSeriesUploadContext?.seriesId || "").trim();
+  const contextSeriesTitle = String(
+    activeSeriesUploadContext?.seriesTitle || "",
+  ).trim();
+  const contextSeasonNumber = Number(activeSeriesUploadContext?.seasonNumber || 1);
+  const contextEpisodeNumber = Number(
+    activeSeriesUploadContext?.episodeNumber || 1,
+  );
+  const contextEpisodeTitle = String(
+    activeSeriesUploadContext?.episodeTitle || "",
+  ).trim();
+  const contextThumb = String(activeSeriesUploadContext?.thumb || "").trim();
   return {
     contentType,
     title: isSeriesLike ? "" : String(formData.get("title") || ""),
     year: isSeriesLike ? "" : String(formData.get("year") || ""),
     description: String(formData.get("description") || ""),
-    thumb: String(formData.get("thumb") || ""),
+    thumb: String(formData.get("thumb") || contextThumb || ""),
     tmdbId: String(formData.get("tmdbId") || ""),
-    seriesTitle: isSeriesLike ? String(formData.get("seriesTitle") || "") : "",
-    seasonNumber: isSeriesLike ? Number(formData.get("seasonNumber") || 1) : 1,
+    seriesId: isSeriesLike
+      ? contextSeriesId || String(formData.get("seriesId") || "")
+      : "",
+    seriesTitle: isSeriesLike
+      ? contextSeriesTitle || String(formData.get("seriesTitle") || "")
+      : "",
+    seasonNumber: isSeriesLike
+      ? contextSeasonNumber || Number(formData.get("seasonNumber") || 1)
+      : 1,
     episodeNumber: isSeriesLike
-      ? Number(formData.get("episodeNumber") || 1)
+      ? contextEpisodeNumber || Number(formData.get("episodeNumber") || 1)
       : 1,
     episodeTitle: isSeriesLike
-      ? String(formData.get("episodeTitle") || "")
+      ? contextEpisodeTitle || String(formData.get("episodeTitle") || "")
       : "",
     transcodeAudioToAac,
   };
@@ -885,6 +959,49 @@ function setFormValue(name, value) {
   field.value = String(value || "");
 }
 
+function applySeriesUploadContext(context) {
+  if (!context) {
+    return;
+  }
+  activeSeriesUploadContext = context;
+  setContentType(context.contentType);
+  setFormValue("seriesId", context.seriesId);
+  setFormValue("seriesTitle", context.seriesTitle);
+  setFormValue("seasonNumber", context.seasonNumber);
+  setFormValue("episodeNumber", context.episodeNumber);
+  setFormValue("episodeTitle", context.episodeTitle);
+  if (String(context.thumb || "").trim()) {
+    setFormValue("thumb", context.thumb);
+  }
+
+  uploadForm
+    ?.querySelectorAll('input[name="contentType"]')
+    .forEach((input) => {
+      if (input instanceof HTMLInputElement) {
+        input.disabled = true;
+      }
+    });
+
+  const seriesTitleField = uploadForm?.elements?.namedItem("seriesTitle");
+  if (seriesTitleField instanceof HTMLInputElement) {
+    seriesTitleField.readOnly = true;
+  }
+
+  if (uploadSeriesContext) {
+    uploadSeriesContext.hidden = false;
+  }
+  if (uploadSeriesContextTitle) {
+    uploadSeriesContextTitle.textContent =
+      context.contentType === "course"
+        ? `Adding lesson to ${context.seriesTitle || "course"}`
+        : `Adding episode to ${context.seriesTitle || "series"}`;
+  }
+  if (uploadSeriesContextMeta) {
+    const unitLabel = context.contentType === "course" ? "Lesson" : "Episode";
+    uploadSeriesContextMeta.textContent = `Upload uses full processing (upload, remux/convert checks, metadata update). This will be saved under the same title and series id. Next default ${unitLabel.toLowerCase()} is ${context.episodeNumber}. Thumbnail is prefilled from the course and can be changed.`;
+  }
+}
+
 async function inferAndPopulateMetadata(file) {
   if (!(file instanceof File)) {
     return;
@@ -915,6 +1032,25 @@ async function inferAndPopulateMetadata(file) {
     }
 
     const inferred = payload?.inferred || {};
+    if (activeSeriesUploadContext) {
+      const episodeTitleField = uploadForm?.elements?.namedItem("episodeTitle");
+      const hasExistingEpisodeTitle = String(
+        episodeTitleField instanceof HTMLInputElement
+          ? episodeTitleField.value
+          : "",
+      ).trim();
+      if (!hasExistingEpisodeTitle) {
+        setFormValue("episodeTitle", inferred.episodeTitle || "");
+      }
+      setStatus(
+        withCompatibilityWarning(
+          `Selected: ${file.name} • Series context locked to "${activeSeriesUploadContext.seriesTitle || activeSeriesUploadContext.seriesId}".`,
+        ),
+        pendingCompatibilityWarning ? "warning" : "success",
+      );
+      return;
+    }
+
     setContentType(inferred.contentType || "movie");
     setFormValue("title", inferred.title || "");
     setFormValue("year", inferred.year || "");
@@ -949,6 +1085,7 @@ async function inferAndPopulateMetadata(file) {
 }
 
 updateFormForContentType();
+applySeriesUploadContext(parseSeriesUploadContextFromQuery());
 updateSubmitState();
 hideUploadProgress();
 updateCompatibilityActions();

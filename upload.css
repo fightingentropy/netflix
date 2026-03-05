@@ -47,6 +47,27 @@ body {
     color: var(--muted);
 }
 
+.upload-context {
+    margin-top: 0.9rem;
+    border: 1px solid #3d2b0b;
+    border-radius: 12px;
+    background: rgb(255 209 102 / 10%);
+    padding: 0.75rem 0.9rem;
+}
+
+.upload-context h2 {
+    margin: 0;
+    font-size: 1rem;
+    color: #ffd98c;
+}
+
+.upload-context p {
+    margin: 0.3rem 0 0;
+    color: #f4ddb1;
+    font-size: 0.9rem;
+    line-height: 1.35;
+}
+
 .back-link {
     color: var(--text);
     text-decoration: none;
@@ -203,6 +224,13 @@ label {
     gap: 0.35rem;
     font-size: 0.92rem;
     color: var(--muted);
+}
+
+.field-hint {
+    margin-top: 0.1rem;
+    color: #bdbdbd;
+    font-size: 0.78rem;
+    line-height: 1.35;
 }
 
 input,
