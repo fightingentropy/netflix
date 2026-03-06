@@ -298,7 +298,8 @@ Runtime:
 
 Prerequisites:
 
-- Bun
+- Rust toolchain
+- Bun or another package runner if you want to use the `package.json` scripts
 - `ffmpeg` and `ffprobe` on `PATH`
 - Optional: `mpv` on `PATH` for native handoff
 
@@ -316,14 +317,16 @@ Open:
 
 Scripts:
 
-- `bun run dev` -> Bun server (`server.js`)
+- `bun run dev` -> Rust server
+- `bun run dev:rust` -> Rust server
+- `bun run dev:bun` -> legacy Bun server (`server.js`)
 - `bun run dev:vite` -> frontend-only Vite dev server
 - `bun run build` / `bun run preview` -> Vite build/preview flow
 
 ## 9) Operational Notes
 
-- `bun run dev` is the full-stack runtime path for `/api/*`.
-- `bun run dev:vite` does not replace backend APIs in `server.js`.
+- `bun run dev` is the full-stack runtime path for `/api/*` and serves the unchanged frontend from Rust.
+- `bun run dev:vite` is frontend-only and does not replace the Rust backend APIs.
 - Native playback launch is intentionally loopback-only.
 - Upload processing depends on ffmpeg availability.
 - Upload compatibility handling:

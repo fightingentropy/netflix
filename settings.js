@@ -1685,7 +1685,7 @@ clearAllCachesBtn?.addEventListener("click", async () => {
 
   try {
     const response = await fetch(`/api/debug/cache?clear=1&t=${Date.now()}`, {
-      method: "GET",
+      method: "POST",
       headers: {
         Accept: "application/json",
       },

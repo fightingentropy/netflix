@@ -2698,9 +2698,14 @@ function getSubtitleTrackByStreamIndex(streamIndex) {
 }
 
 function shouldUseNativeEmbeddedSubtitleTrack(track) {
-  // For embedded text subtitles, prefer in-band rendering on current Chromium.
-  // This avoids slow server-side VTT extraction on large remote MP4 files.
-  return Boolean(track && !track.isExternal && track.isTextBased);
+  // Use native embedded subtitle rendering only when there is no direct VTT URL.
+  // If a VTT URL exists, keep subtitle switching decoupled from the video source
+  // to avoid disruptive reloads when the user changes subtitle tracks.
+  const hasTrack = Boolean(track);
+  if (!hasTrack || track.isExternal || !track.isTextBased) {
+    return false;
+  }
+  return !String(track.vttUrl || "").trim();
 }
 
 function ensureNativeSubtitleTrackVisible() {
@@ -4611,6 +4616,15 @@ function buildGallerySavePayloadTemplate(
       .toLowerCase(),
     title: String(metadata?.displayTitle || title || "").trim(),
     year: String(metadata?.displayYear || year || "").trim(),
+    seasonNumber: Math.max(
+      1,
+      Math.floor(Number(metadata?.seasonNumber || seasonNumber || 1)),
+    ),
+    episodeNumber: Math.max(
+      1,
+      Math.floor(Number(metadata?.episodeNumber || episodeNumber || 1)),
+    ),
+    episodeTitle: String(metadata?.episodeTitle || "").trim(),
     thumb: String(thumbParam || "").trim(),
     description: "",
     filename: String(

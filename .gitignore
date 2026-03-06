@@ -4,6 +4,7 @@
 # Dependencies / builds
 node_modules/
 dist/
+target/
 
 # Env files
 .env
