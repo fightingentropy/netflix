@@ -753,6 +753,208 @@ impl Db {
         Ok(())
     }
 
+    pub async fn get_resolved_stream_cache(
+        &self,
+        cache_key: String,
+    ) -> AppResult<Option<(Value, i64, i64)>> {
+        let path = self.path.clone();
+        task::spawn_blocking(move || {
+            let connection = open_connection(&path)?;
+            let row = connection
+                .query_row(
+                    "
+                    SELECT payload_json, expires_at, next_validation_at
+                    FROM resolved_stream_cache
+                    WHERE cache_key = ?
+                    ",
+                    [cache_key.as_str()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((payload_json, expires_at, next_validation_at)) = row else {
+                return Ok(None);
+            };
+            if expires_at <= now_ms() {
+                connection.execute(
+                    "DELETE FROM resolved_stream_cache WHERE cache_key = ?",
+                    [cache_key.as_str()],
+                )?;
+                return Ok(None);
+            }
+            let parsed = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+            if parsed.is_null() || !parsed.is_object() {
+                connection.execute(
+                    "DELETE FROM resolved_stream_cache WHERE cache_key = ?",
+                    [cache_key.as_str()],
+                )?;
+                return Ok(None);
+            }
+            Ok(Some((parsed, expires_at.max(0), next_validation_at.max(0))))
+        })
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map_err(|error: rusqlite::Error| ApiError::internal(error.to_string()))
+    }
+
+    pub async fn set_resolved_stream_cache(
+        &self,
+        cache_key: String,
+        payload: Value,
+        expires_at: i64,
+        next_validation_at: i64,
+    ) -> AppResult<()> {
+        let path = self.path.clone();
+        task::spawn_blocking(move || {
+            let connection = open_connection(&path)?;
+            connection.execute(
+                "
+                INSERT INTO resolved_stream_cache (
+                  cache_key,
+                  payload_json,
+                  expires_at,
+                  is_ephemeral,
+                  next_validation_at,
+                  updated_at
+                )
+                VALUES (?, ?, ?, 0, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                  payload_json = excluded.payload_json,
+                  expires_at = excluded.expires_at,
+                  is_ephemeral = excluded.is_ephemeral,
+                  next_validation_at = excluded.next_validation_at,
+                  updated_at = excluded.updated_at
+                ",
+                params![
+                    cache_key,
+                    serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_owned()),
+                    expires_at.max(next_validation_at).max(now_ms() + 1_000),
+                    next_validation_at.max(0),
+                    now_ms(),
+                ],
+            )?;
+            trim_table(
+                &connection,
+                "resolved_stream_cache",
+                "updated_at",
+                RESOLVED_STREAM_PERSIST_MAX_ENTRIES,
+            )?;
+            Ok::<(), rusqlite::Error>(())
+        })
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn get_movie_quick_start_cache(
+        &self,
+        cache_key: String,
+    ) -> AppResult<Option<(Value, i64)>> {
+        let path = self.path.clone();
+        task::spawn_blocking(move || {
+            let connection = open_connection(&path)?;
+            let row = connection
+                .query_row(
+                    "
+                    SELECT payload_json, expires_at
+                    FROM movie_quick_start_cache
+                    WHERE cache_key = ?
+                    ",
+                    [cache_key.as_str()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .optional()?;
+            let Some((payload_json, expires_at)) = row else {
+                return Ok(None);
+            };
+            if expires_at <= now_ms() {
+                connection.execute(
+                    "DELETE FROM movie_quick_start_cache WHERE cache_key = ?",
+                    [cache_key.as_str()],
+                )?;
+                return Ok(None);
+            }
+            let parsed = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+            if parsed.is_null() || !parsed.is_object() {
+                connection.execute(
+                    "DELETE FROM movie_quick_start_cache WHERE cache_key = ?",
+                    [cache_key.as_str()],
+                )?;
+                return Ok(None);
+            }
+            Ok(Some((parsed, expires_at.max(0))))
+        })
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map_err(|error: rusqlite::Error| ApiError::internal(error.to_string()))
+    }
+
+    pub async fn set_movie_quick_start_cache(
+        &self,
+        cache_key: String,
+        payload: Value,
+        expires_at: i64,
+    ) -> AppResult<()> {
+        let path = self.path.clone();
+        task::spawn_blocking(move || {
+            let connection = open_connection(&path)?;
+            connection.execute(
+                "
+                INSERT INTO movie_quick_start_cache (
+                  cache_key,
+                  payload_json,
+                  expires_at,
+                  updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                  payload_json = excluded.payload_json,
+                  expires_at = excluded.expires_at,
+                  updated_at = excluded.updated_at
+                ",
+                params![
+                    cache_key,
+                    serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_owned()),
+                    expires_at.max(now_ms() + 1_000),
+                    now_ms(),
+                ],
+            )?;
+            trim_table(
+                &connection,
+                "movie_quick_start_cache",
+                "updated_at",
+                MOVIE_QUICK_START_PERSIST_MAX_ENTRIES,
+            )?;
+            Ok::<(), rusqlite::Error>(())
+        })
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn delete_movie_quick_start_cache(&self, cache_key: String) -> AppResult<()> {
+        let path = self.path.clone();
+        task::spawn_blocking(move || {
+            let connection = open_connection(&path)?;
+            connection.execute(
+                "DELETE FROM movie_quick_start_cache WHERE cache_key = ?",
+                [cache_key.as_str()],
+            )?;
+            Ok::<(), rusqlite::Error>(())
+        })
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+        Ok(())
+    }
+
     pub async fn get_media_probe_cache(&self, probe_key: String) -> AppResult<Option<Value>> {
         let path = self.path.clone();
         task::spawn_blocking(move || {
@@ -1278,6 +1480,38 @@ mod tests {
             db.get_playback_session("123:auto:1080p".to_owned())
                 .await
                 .expect("load auto session")
+                .is_none()
+        );
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn persists_movie_quick_start_cache_entries() {
+        let path = unique_temp_db_path("movie-quick-start");
+        let db = setup_test_playback_session_db(&path).await;
+        db.set_movie_quick_start_cache(
+            "rd-torrent:abc".to_owned(),
+            json!({"torrentId":"123"}),
+            super::now_ms() + 60_000,
+        )
+        .await
+        .expect("persist quick start cache");
+
+        let cached = db
+            .get_movie_quick_start_cache("rd-torrent:abc".to_owned())
+            .await
+            .expect("load quick start cache")
+            .expect("cache exists");
+        assert_eq!(cached.0["torrentId"], "123");
+
+        db.delete_movie_quick_start_cache("rd-torrent:abc".to_owned())
+            .await
+            .expect("delete quick start cache");
+        assert!(
+            db.get_movie_quick_start_cache("rd-torrent:abc".to_owned())
+                .await
+                .expect("load deleted quick start cache")
                 .is_none()
         );
 

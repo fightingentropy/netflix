@@ -25,6 +25,13 @@ const REAL_DEBRID_API_BASE: &str = "https://api.real-debrid.com/rest/1.0";
 const SOURCE_LANGUAGE_FILTER_DEFAULT: &str = "en";
 const RESOLVE_MAX_MS: i64 = 90_000;
 const PLAYABLE_URL_VALIDATE_TIMEOUT_MS: u64 = 8_000;
+const TORRENTIO_REQUEST_TIMEOUT_MS: u64 = 65_000;
+const TORRENTIO_REQUEST_MAX_ATTEMPTS: usize = 2;
+const TORRENTIO_REQUEST_RETRY_DELAY_MS: u64 = 1_200;
+const TORRENTIO_RETRY_MAX_ELAPSED_MS: i64 = 25_000;
+const TORRENTIO_CACHE_MAX_AGE_DEFAULT_SECONDS: i64 = 60 * 60;
+const TORRENTIO_CACHE_STALE_WINDOW_DEFAULT_SECONDS: i64 = 4 * 60 * 60;
+const RD_TORRENT_CACHE_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 const EXTERNAL_SUBTITLE_STREAM_INDEX_BASE: i64 = 2_000_000;
 const DEFAULT_TRACKERS: &[&str] = &[
     "udp://tracker.opentrackr.org:1337/announce",
@@ -709,11 +716,21 @@ impl ResolverService {
         let info_hash = get_stream_info_hash(stream);
         if let Ok(Some(reusable_torrent_id)) =
             self.find_reusable_rd_torrent_by_hash(&info_hash).await
-            && let Ok(resolved) = self
+        {
+            match self
                 .resolve_from_torrent_id(&reusable_torrent_id, &info_hash, stream, fallback_name)
                 .await
-        {
-            return Ok(resolved);
+            {
+                Ok(resolved) => {
+                    let _ = self
+                        .set_cached_rd_torrent_id(&info_hash, &reusable_torrent_id)
+                        .await;
+                    return Ok(resolved);
+                }
+                Err(_) => {
+                    let _ = self.delete_cached_rd_torrent_id(&info_hash).await;
+                }
+            }
         }
         let add_magnet = self
             .rd_fetch_form(
@@ -733,10 +750,17 @@ impl ResolverService {
         let result = self
             .resolve_from_torrent_id(&torrent_id, &info_hash, stream, fallback_name)
             .await;
-        if result.is_err() {
-            let _ = self.safe_delete_torrent(&torrent_id).await;
+        match result {
+            Ok(resolved) => {
+                let _ = self.set_cached_rd_torrent_id(&info_hash, &torrent_id).await;
+                Ok(resolved)
+            }
+            Err(error) => {
+                let _ = self.safe_delete_torrent(&torrent_id).await;
+                let _ = self.delete_cached_rd_torrent_id(&info_hash).await;
+                Err(error)
+            }
         }
-        result
     }
 
     async fn resolve_from_torrent_id(
@@ -889,6 +913,10 @@ impl ResolverService {
             return Ok(None);
         }
 
+        if let Some(cached_torrent_id) = self.get_cached_rd_torrent_id(&normalized_hash).await? {
+            return Ok(Some(cached_torrent_id));
+        }
+
         for page in 1..=4 {
             let payload = self
                 .rd_fetch_json(
@@ -908,10 +936,53 @@ impl ResolverService {
                 let torrent_id = stringify_json(item.get("id"));
                 (hash == normalized_hash && !torrent_id.is_empty()).then_some(torrent_id)
             }) {
+                let _ = self
+                    .set_cached_rd_torrent_id(&normalized_hash, &torrent_id)
+                    .await;
                 return Ok(Some(torrent_id));
             }
         }
         Ok(None)
+    }
+
+    async fn get_cached_rd_torrent_id(&self, info_hash: &str) -> AppResult<Option<String>> {
+        let cache_key = build_rd_torrent_cache_key(info_hash);
+        let Some((payload, _)) = self.db.get_movie_quick_start_cache(cache_key).await? else {
+            return Ok(None);
+        };
+        let torrent_id = stringify_json(payload.get("torrentId"));
+        if torrent_id.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(torrent_id))
+    }
+
+    async fn set_cached_rd_torrent_id(&self, info_hash: &str, torrent_id: &str) -> AppResult<()> {
+        let normalized_hash = normalize_source_hash(info_hash);
+        let normalized_torrent_id = torrent_id.trim();
+        if normalized_hash.is_empty() || normalized_torrent_id.is_empty() {
+            return Ok(());
+        }
+        self.db
+            .set_movie_quick_start_cache(
+                build_rd_torrent_cache_key(&normalized_hash),
+                json!({
+                    "infoHash": normalized_hash,
+                    "torrentId": normalized_torrent_id
+                }),
+                now_ms() + RD_TORRENT_CACHE_TTL_MS,
+            )
+            .await
+    }
+
+    async fn delete_cached_rd_torrent_id(&self, info_hash: &str) -> AppResult<()> {
+        let normalized_hash = normalize_source_hash(info_hash);
+        if normalized_hash.is_empty() {
+            return Ok(());
+        }
+        self.db
+            .delete_movie_quick_start_cache(build_rd_torrent_cache_key(&normalized_hash))
+            .await
     }
 
     async fn wait_for_torrent_to_be_ready(&self, torrent_id: &str) -> AppResult<Value> {
@@ -1345,29 +1416,85 @@ impl ResolverService {
     }
 
     async fn fetch_torrentio_streams(&self, path: &str) -> AppResult<Vec<TorrentioStream>> {
-        let response = self
-            .client
-            .get(format!("{}{}", self.config.torrentio_base_url, path))
-            .timeout(Duration::from_millis(20_000))
-            .send()
-            .await
-            .map_err(|error| map_reqwest_error(error, "Torrentio request timed out."))?;
-        if !response.status().is_success() {
-            return Err(ApiError::internal(format!(
-                "Request failed ({})",
-                response.status()
-            )));
+        let url = format!("{}{}", self.config.torrentio_base_url, path);
+        let cache_key = build_torrentio_stream_cache_key(&self.config.torrentio_base_url, path);
+        let cached = self.db.get_resolved_stream_cache(cache_key.clone()).await?;
+        let now = now_ms();
+        if let Some((payload, _, next_validation_at)) = cached.as_ref()
+            && *next_validation_at > now
+        {
+            return parse_torrentio_streams_payload(payload);
         }
-        let payload = response
-            .json::<Value>()
-            .await
-            .map_err(|error| ApiError::internal(error.to_string()))?;
-        let streams = payload
-            .get("streams")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new()));
-        serde_json::from_value::<Vec<TorrentioStream>>(streams)
-            .map_err(|error| ApiError::internal(error.to_string()))
+
+        let mut last_error = None;
+
+        for attempt in 0..TORRENTIO_REQUEST_MAX_ATTEMPTS {
+            let is_last_attempt = attempt + 1 == TORRENTIO_REQUEST_MAX_ATTEMPTS;
+            let attempt_started_at = now_ms();
+            let response = self
+                .client
+                .get(&url)
+                .timeout(Duration::from_millis(TORRENTIO_REQUEST_TIMEOUT_MS))
+                .send()
+                .await;
+
+            match response {
+                Ok(response) => {
+                    let status = response.status();
+                    if !status.is_success() {
+                        let attempt_elapsed_ms = now_ms() - attempt_started_at;
+                        if !is_last_attempt
+                            && is_retryable_torrentio_status(status)
+                            && attempt_elapsed_ms <= TORRENTIO_RETRY_MAX_ELAPSED_MS
+                        {
+                            sleep(Duration::from_millis(TORRENTIO_REQUEST_RETRY_DELAY_MS)).await;
+                            continue;
+                        }
+                        last_error = Some(ApiError::bad_gateway(format!(
+                            "Torrentio request failed ({status})."
+                        )));
+                        break;
+                    }
+
+                    let payload = response
+                        .json::<Value>()
+                        .await
+                        .map_err(|error| ApiError::internal(error.to_string()))?;
+                    let (expires_at, next_validation_at) =
+                        compute_torrentio_cache_deadlines(&payload);
+                    self.db
+                        .set_resolved_stream_cache(
+                            cache_key.clone(),
+                            payload.clone(),
+                            expires_at,
+                            next_validation_at,
+                        )
+                        .await?;
+                    return parse_torrentio_streams_payload(&payload);
+                }
+                Err(error) => {
+                    let attempt_elapsed_ms = now_ms() - attempt_started_at;
+                    if !is_last_attempt
+                        && is_retryable_torrentio_transport_error(&error)
+                        && attempt_elapsed_ms <= TORRENTIO_RETRY_MAX_ELAPSED_MS
+                    {
+                        sleep(Duration::from_millis(TORRENTIO_REQUEST_RETRY_DELAY_MS)).await;
+                        continue;
+                    }
+                    last_error = Some(map_reqwest_error(error, "Torrentio request timed out."));
+                    break;
+                }
+            }
+        }
+
+        if let Some((payload, expires_at, _)) = cached
+            && expires_at > now_ms()
+        {
+            return parse_torrentio_streams_payload(&payload);
+        }
+
+        Err(last_error
+            .unwrap_or_else(|| ApiError::bad_gateway("Torrentio request failed after retrying.")))
     }
 
     async fn compute_source_health_scores(
@@ -2424,12 +2551,75 @@ fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn build_torrentio_stream_cache_key(base_url: &str, path: &str) -> String {
+    format!(
+        "torrentio:{}{}",
+        base_url.trim().trim_end_matches('/'),
+        path.trim()
+    )
+}
+
+fn build_rd_torrent_cache_key(info_hash: &str) -> String {
+    format!("rd-torrent:{}", normalize_source_hash(info_hash))
+}
+
+fn parse_torrentio_streams_payload(payload: &Value) -> AppResult<Vec<TorrentioStream>> {
+    let streams = payload
+        .get("streams")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    serde_json::from_value::<Vec<TorrentioStream>>(streams)
+        .map_err(|error| ApiError::internal(error.to_string()))
+}
+
+fn compute_torrentio_cache_deadlines(payload: &Value) -> (i64, i64) {
+    let now = now_ms();
+    let fresh_seconds = torrentio_cache_seconds(
+        payload,
+        "cacheMaxAge",
+        TORRENTIO_CACHE_MAX_AGE_DEFAULT_SECONDS,
+    );
+    let stale_seconds = torrentio_cache_seconds(
+        payload,
+        "staleError",
+        torrentio_cache_seconds(
+            payload,
+            "staleRevalidate",
+            TORRENTIO_CACHE_STALE_WINDOW_DEFAULT_SECONDS,
+        ),
+    )
+    .max(torrentio_cache_seconds(
+        payload,
+        "staleRevalidate",
+        TORRENTIO_CACHE_STALE_WINDOW_DEFAULT_SECONDS,
+    ));
+    let next_validation_at = now + fresh_seconds.max(1) * 1_000;
+    let expires_at = next_validation_at + stale_seconds.max(0) * 1_000;
+    (expires_at.max(next_validation_at), next_validation_at)
+}
+
+fn torrentio_cache_seconds(payload: &Value, key: &str, default_seconds: i64) -> i64 {
+    payload
+        .get(key)
+        .and_then(Value::as_i64)
+        .unwrap_or(default_seconds)
+        .max(0)
+}
+
 fn map_reqwest_error(error: reqwest::Error, timeout_message: &str) -> ApiError {
     if error.is_timeout() {
         ApiError::internal(timeout_message)
     } else {
         ApiError::internal(error.to_string())
     }
+}
+
+fn is_retryable_torrentio_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 429) || status.is_server_error()
+}
+
+fn is_retryable_torrentio_transport_error(error: &reqwest::Error) -> bool {
+    error.is_connect()
 }
 
 fn stringify_json(value: Option<&Value>) -> String {
@@ -3099,10 +3289,13 @@ impl IfEmptyThen for String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
-        TorrentioBehaviorHints, TorrentioStream, collect_episode_signatures,
-        normalize_allowed_formats, normalize_source_hash, parse_runtime_from_label_seconds,
-        parse_seed_count,
+        TorrentioBehaviorHints, TorrentioStream, build_rd_torrent_cache_key,
+        build_torrentio_stream_cache_key, collect_episode_signatures,
+        compute_torrentio_cache_deadlines, normalize_allowed_formats, normalize_source_hash,
+        now_ms, parse_runtime_from_label_seconds, parse_seed_count,
     };
 
     #[test]
@@ -3154,5 +3347,37 @@ mod tests {
             sources: Vec::new(),
         };
         assert_eq!(stream.behaviorHints.filename, "Movie.2024.mp4");
+    }
+
+    #[test]
+    fn normalizes_torrentio_stream_cache_keys() {
+        assert_eq!(
+            build_torrentio_stream_cache_key(
+                "https://torrentio.strem.fun/",
+                "/stream/movie/tt1.json"
+            ),
+            "torrentio:https://torrentio.strem.fun/stream/movie/tt1.json"
+        );
+    }
+
+    #[test]
+    fn normalizes_rd_torrent_cache_keys() {
+        assert_eq!(
+            build_rd_torrent_cache_key("ABCDEF0123456789ABCDEF0123456789ABCDEF01"),
+            "rd-torrent:abcdef0123456789abcdef0123456789abcdef01"
+        );
+    }
+
+    #[test]
+    fn computes_torrentio_cache_deadlines_from_payload() {
+        let before = now_ms();
+        let payload = json!({
+            "cacheMaxAge": 60,
+            "staleRevalidate": 120,
+            "staleError": 300
+        });
+        let (expires_at, next_validation_at) = compute_torrentio_cache_deadlines(&payload);
+        assert!(next_validation_at >= before + 60_000);
+        assert!(expires_at >= next_validation_at + 300_000);
     }
 }
