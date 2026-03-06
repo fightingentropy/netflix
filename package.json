@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "./scripts/dev-rust.sh",
-    "dev:bun": "bun run --hot server.js",
     "dev:rust": "cargo run",
     "dev:vite": "vite --host localhost --port 5173 --strictPort",
     "test:rust": "cargo test",

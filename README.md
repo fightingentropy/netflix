@@ -1,4 +1,4 @@
-# Netflix Clone (Bun + Vanilla JS)
+# Netflix Clone (Rust + Vanilla JS)
 
 This project is a local Netflix-style streaming app with:
 
@@ -6,7 +6,7 @@ This project is a local Netflix-style streaming app with:
 - A full custom player (`player.html`)
 - A settings UI (`settings.html`)
 - A local upload workflow (`upload.html`)
-- A Bun backend (`server.js`) that handles metadata, stream resolving, remux/HLS/subtitles, caching, and local library management
+- A Rust backend that handles metadata, stream resolving, remux/HLS/subtitles, caching, and local library management
 
 ## Table of Contents
 
@@ -37,14 +37,14 @@ The app combines two media paths:
 
 ### Runtime
 
-- Backend: Bun server in `server.js`
+- Backend: Rust (Axum) in `src/`
 - Frontend: static HTML/CSS/JS in repository root
 - External tools: `ffmpeg`, `ffprobe`, optional `mpv`
-- Caching: in-memory + persistent SQLite-backed cache data (managed inside `server.js`)
+- Caching: in-memory + persistent SQLite-backed cache data (managed by the Rust backend)
 
 ### Main files
 
-- `server.js`: API, static serving, resolving, remux/HLS/subtitles, upload processing, caching, health/debug
+- `src/`: Rust API, static serving, resolving, remux/HLS/subtitles, upload processing, caching, health/debug
 - `index.html` + `script.js`: home screen, hero, continue watching, details modal, account menu
 - `player.html` + `player.js`: video playback UI, source selection, subtitles/audio handling, fallback logic
 - `settings.html` + `settings.js`: quality/source/profile/native-playback/remux preferences
@@ -167,7 +167,7 @@ Keyboard controls:
 
 ## 5) API Reference
 
-All API routes are served by `server.js`.
+All API routes are served by the Rust backend.
 
 ### Config, health, debug
 
@@ -319,13 +319,12 @@ Scripts:
 
 - `bun run dev` -> Rust server
 - `bun run dev:rust` -> Rust server
-- `bun run dev:bun` -> legacy Bun server (`server.js`)
 - `bun run dev:vite` -> frontend-only Vite dev server
 - `bun run build` / `bun run preview` -> Vite build/preview flow
 
 ## 9) Operational Notes
 
-- `bun run dev` is the full-stack runtime path for `/api/*` and serves the unchanged frontend from Rust.
+- `bun run dev` is the full-stack runtime: Rust serves `/api/*` and the frontend.
 - `bun run dev:vite` is frontend-only and does not replace the Rust backend APIs.
 - Native playback launch is intentionally loopback-only.
 - Upload processing depends on ffmpeg availability.
