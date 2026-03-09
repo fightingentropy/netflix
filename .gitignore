@@ -1,0 +1,25 @@
+# OS / editor
+.DS_Store
+
+# Dependencies / builds
+node_modules/
+dist/
+target/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Local playback/cache artifacts
+cache/
+
+# Large local media files
+*.mkv
+*.webm
+*.avi
+*.mov
+*.m4v
+*.ts
+*.mp4
+assets/videos/

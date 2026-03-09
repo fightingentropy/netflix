@@ -1,0 +1,67 @@
+{
+  "movies": [
+    {
+      "id": "local-movie-pride-prejudice-2005-2160p-4k-web-x265-10bit-aac5-1-yts-mx",
+      "title": "Pride.Prejudice.2005.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.MX]",
+      "tmdbId": "4348",
+      "year": "",
+      "src": "assets/videos/pride-prejudice-2005-2160p-4k-web-x265-10bit-aac5-1-yts-mx-20260304125504-e98r02.mp4",
+      "thumb": "assets/images/thumbnail.jpg",
+      "description": "",
+      "uploadedAt": 1772628904334
+    }
+  ],
+  "series": [
+    {
+      "id": "local-course-electlix-3",
+      "title": "Electrics LVL 3",
+      "contentKind": "course",
+      "tmdbId": "",
+      "year": "2025",
+      "preferredContainer": "mp4",
+      "requiresLocalEpisodeSources": true,
+      "episodes": [
+        {
+          "title": "Webinar 1: Short intro & basic electrics",
+          "description": "",
+          "thumb": "assets/images/electricity.webp",
+          "src": "assets/videos/webinar-electrics-webinar-1-short-intro-basic-electrics-by-access-training-20260304133944-nypjch.mp4",
+          "contentKind": "course",
+          "seasonNumber": 1,
+          "episodeNumber": 1,
+          "uploadedAt": 1772631584314
+        },
+        {
+          "title": "Webinar 2: Basic Electrics",
+          "description": "",
+          "thumb": "assets/images/electricity.webp",
+          "src": "assets/videos/webinar-electrics-webinar-1-basic-electrics-by-access-training-20260305103751-jpb1h4.mp4",
+          "contentKind": "course",
+          "seasonNumber": 1,
+          "episodeNumber": 2,
+          "uploadedAt": 1772707071719
+        },
+        {
+          "title": "Webinar 3: Legislation and definitions",
+          "description": "",
+          "thumb": "assets/images/electricity.webp",
+          "src": "assets/videos/webinar-electrics-webinar-1-legislation-and-definitions-by-access-training-20260305105022-p2bq7k.mp4",
+          "contentKind": "course",
+          "seasonNumber": 1,
+          "episodeNumber": 3,
+          "uploadedAt": 1772707822124
+        },
+        {
+          "title": "Webinar 4: Mains position",
+          "description": "",
+          "thumb": "assets/images/electricity.webp",
+          "src": "assets/videos/lesson-4-20260305110137-5yeapv.mp4",
+          "contentKind": "course",
+          "seasonNumber": 1,
+          "episodeNumber": 4,
+          "uploadedAt": 1772708497287
+        }
+      ]
+    }
+  ]
+}

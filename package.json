@@ -1,0 +1,16 @@
+{
+  "name": "netflix-app",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "./scripts/dev-rust.sh",
+    "dev:rust": "cargo run",
+    "dev:vite": "vite --host localhost --port 5173 --strictPort",
+    "test:rust": "cargo test",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "latest"
+  }
+}
