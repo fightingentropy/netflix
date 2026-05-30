@@ -1713,6 +1713,7 @@ fn build_gallery_download_job_key(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use axum::body::{Body, Bytes};
     use futures_util::stream;

@@ -27,7 +27,7 @@ use crate::media::{
     merge_preferred_subtitle_tracks,
 };
 use crate::persistence::{Db, PersistPlaybackSessionInput, PlaybackSession, SourceHealthStats};
-use crate::routes::{
+use crate::utils::{
     normalize_preferred_audio_lang, normalize_preferred_stream_quality,
     normalize_subtitle_preference,
 };

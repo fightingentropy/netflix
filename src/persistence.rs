@@ -9,11 +9,11 @@ use tokio::task;
 
 use crate::config::Config;
 use crate::error::{ApiError, AppResult};
-use crate::routes::{
+use crate::utils::now_ms;
+use crate::utils::{
     normalize_preferred_audio_lang, normalize_preferred_stream_quality,
     normalize_session_health_state, normalize_subtitle_preference,
 };
-use crate::utils::now_ms;
 
 const TITLE_PREFERENCES_STALE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 const PLAYBACK_SESSION_STALE_MS: i64 = 30 * 24 * 60 * 60 * 1000;

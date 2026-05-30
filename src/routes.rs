@@ -49,6 +49,10 @@ use crate::twitch::twitch_stream_resolve_handler;
 use crate::upload::UPLOAD_SESSION_CHUNK_MAX_BYTES;
 use crate::upload::UploadService;
 use crate::utils::now_ms;
+use crate::utils::{
+    normalize_preferred_audio_lang, normalize_preferred_stream_quality,
+    normalize_session_health_state, normalize_subtitle_preference,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -2227,44 +2231,6 @@ async fn resolve_effective_preferred_audio_lang(
     }
 }
 
-pub fn normalize_preferred_audio_lang(value: &str) -> String {
-    match value.trim().to_lowercase().as_str() {
-        "" | "auto" => "auto".to_owned(),
-        "en" | "fr" | "es" | "de" | "it" | "pt" => value.trim().to_lowercase(),
-        _ => "auto".to_owned(),
-    }
-}
-
-pub fn normalize_preferred_stream_quality(value: &str) -> String {
-    match value.trim().to_lowercase().as_str() {
-        "" | "auto" => "auto".to_owned(),
-        "4k" | "uhd" | "2160" | "2160p" => "2160p".to_owned(),
-        "1080" | "1080p" => "1080p".to_owned(),
-        "720" | "720p" => "720p".to_owned(),
-        _ => "auto".to_owned(),
-    }
-}
-
-pub fn normalize_subtitle_preference(value: &str) -> String {
-    let raw = value.trim().to_lowercase();
-    if raw.is_empty() || raw == "auto" {
-        return String::new();
-    }
-    if matches!(raw.as_str(), "off" | "none" | "disabled") {
-        return "off".to_owned();
-    }
-    normalize_iso_language(&raw)
-}
-
-pub fn normalize_session_health_state(value: &str) -> String {
-    match value.trim().to_lowercase().as_str() {
-        "healthy" => "healthy".to_owned(),
-        "degraded" => "degraded".to_owned(),
-        "invalid" => "invalid".to_owned(),
-        _ => "unknown".to_owned(),
-    }
-}
-
 fn extract_series_id_from_source_identity(source_identity: &str) -> String {
     let Some(rest) = source_identity.trim().strip_prefix("series:") else {
         return String::new();
@@ -2273,34 +2239,6 @@ fn extract_series_id_from_source_identity(source_identity: &str) -> String {
         return String::new();
     };
     series_id.trim().to_ascii_lowercase()
-}
-
-fn normalize_iso_language(value: &str) -> String {
-    let normalized = value
-        .trim()
-        .to_lowercase()
-        .chars()
-        .filter(|ch| ch.is_ascii_alphabetic())
-        .collect::<String>();
-    let alias = match normalized.as_str() {
-        "eng" => "en",
-        "fre" | "fra" => "fr",
-        "spa" => "es",
-        "ger" | "deu" => "de",
-        "ita" => "it",
-        "por" => "pt",
-        "jpn" => "ja",
-        "kor" => "ko",
-        "zho" | "chi" => "zh",
-        "dut" | "nld" => "nl",
-        "rum" | "ron" => "ro",
-        _ => normalized.as_str(),
-    };
-    if alias.len() == 2 {
-        alias.to_owned()
-    } else {
-        alias.chars().take(2).collect()
-    }
 }
 
 async fn infer_upload_metadata(state: &AppState, file_name: &str) -> AppResult<Value> {
